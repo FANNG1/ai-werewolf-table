@@ -371,6 +371,26 @@ export function DayPhase({
           ))}
         </div>
 
+        {/* 已投票明细：谁投了谁（顺序公投，逐张出现）*/}
+        {roundVotes.length > 0 && (
+          <div className="mb-4 bg-gray-800 rounded-xl p-3">
+            <p className="text-xs text-gray-400 mb-2">投票情况</p>
+            <div className="space-y-1">
+              {roundVotes.map((v) => {
+                const voter = players.find((p) => p.id === v.voterId)
+                const target = players.find((p) => p.id === v.targetId)
+                return (
+                  <div key={v.voterId} className="text-sm text-gray-300 flex items-center gap-1">
+                    <span className={voter?.isHuman ? 'text-blue-300' : ''}>{voter?.name}</span>
+                    <span className="text-gray-500">→</span>
+                    <span className="text-red-300">{target?.name}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {isHumanTurnToVote && (
           <button
             onClick={() => {

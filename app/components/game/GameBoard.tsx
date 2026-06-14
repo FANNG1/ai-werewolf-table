@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { isWerewolf, ROLE_EMOJIS, ROLE_NAMES } from '../../lib/roles'
 import type { GameState, Phase } from '../../lib/types'
 import { DayPhase } from './DayPhase'
+import { HistoryModal } from './HistoryModal'
 import { NightPhase } from './NightPhase'
 import { PhaseHeader } from './PhaseHeader'
 import { PlayerCard } from './PlayerCard'
@@ -49,6 +50,7 @@ export function GameBoard({
 }: Props) {
   const { phase, players, round, winner } = state
   const [showRoleModal, setShowRoleModal] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const humanPlayer = players.find((p) => p.isHuman)
   const isNight = phase.startsWith('night')
 
@@ -179,6 +181,16 @@ export function GameBoard({
         )}
       </div>
 
+      {/* History peek button */}
+      <div className="fixed bottom-4 left-4">
+        <button
+          onClick={() => setShowHistory(true)}
+          className="bg-gray-800 border border-gray-600 text-white rounded-full px-4 py-2 text-sm shadow-lg"
+        >
+          📜 记录
+        </button>
+      </div>
+
       {/* Role peek button */}
       {humanPlayer && (
         <div className="fixed bottom-4 right-4">
@@ -190,6 +202,8 @@ export function GameBoard({
           </button>
         </div>
       )}
+
+      {showHistory && <HistoryModal state={state} onClose={() => setShowHistory(false)} />}
 
       {/* Role modal */}
       {showRoleModal && humanPlayer && (

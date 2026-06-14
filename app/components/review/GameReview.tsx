@@ -55,7 +55,7 @@ export function GameReview({ state, onNewGame }: Props) {
       <div className="bg-gray-800 rounded-2xl p-4 mb-6 text-center">
         <div className="text-4xl mb-2">{winner === 'werewolves' ? '🐺' : '🏡'}</div>
         <h2 className="text-xl font-bold text-white mb-1">{winnerTeam}阵营获胜！</h2>
-        <p className="text-gray-400 text-sm">共 {round - 1} 轮</p>
+        <p className="text-gray-400 text-sm">共 {round} 轮</p>
       </div>
 
       {/* Deep analysis */}
@@ -137,7 +137,7 @@ export function GameReview({ state, onNewGame }: Props) {
       {/* Round timeline */}
       <div className="mb-6">
         <h3 className="text-gray-300 font-semibold mb-3">游戏过程</h3>
-        {Array.from({ length: round - 1 }, (_, i) => i + 1).map((r) => {
+        {Array.from({ length: round }, (_, i) => i + 1).map((r) => {
           const deaths = deathLogs(r)
           const spks = speechLogs(r)
           const nightActions = getNightActionsForRound(state, r)

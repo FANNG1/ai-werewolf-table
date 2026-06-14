@@ -93,7 +93,7 @@ export function buildGameTranscript(state: GameState): string {
 
   lines.push('【对局信息】')
   lines.push(`获胜方：${winner === 'werewolves' ? '狼人阵营' : '村民阵营'}`)
-  lines.push(`总轮数：${round - 1} 轮`)
+  lines.push(`总轮数：${round} 轮`)
   lines.push('')
 
   lines.push('【全部玩家身份】')
@@ -104,7 +104,7 @@ export function buildGameTranscript(state: GameState): string {
   }
   lines.push('')
 
-  for (let r = 1; r < round; r++) {
+  for (let r = 1; r <= round; r++) {
     lines.push(`========== 第 ${r} 轮 ==========`)
 
     // 夜晚行动

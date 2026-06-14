@@ -338,8 +338,22 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
     isWerewolf(player.role) && state.wolfPlan && state.wolfPlanRound === state.round
       ? `\n\n【狼队昨晚商定的作战计划（仅狼队知道，作为参考而非死命令）】\n${formatWolfPlanForPlayer(state.wolfPlan, player, state)}\n注意：这是昨晚在不知道天亮结果时预先定的计划。如果天亮后的死亡情况、其他人的发言或当前票型与计划的设想不符，你要临场灵活调整、随机应变，不必机械照搬；用你自己的话表达，绝不能照搬原文，也不要暴露存在“计划”。`
       : ''
+  // 本轮发言进度：哪些人已经发言、哪些人还没轮到——避免 AI 评价尚未发言者
+  const spokenThisRound = state.speeches.filter((s) => s.round === state.round)
+  const spokenNames = spokenThisRound
+    .map((s) => state.players.find((p) => p.id === s.playerId)?.name)
+    .filter((n): n is string => !!n && n !== player.name)
+  const notSpokenNames = state.players
+    .filter((p) => p.isAlive && p.id !== player.id && !spokenThisRound.some((s) => s.playerId === p.id))
+    .map((p) => p.name)
+  const progressNote = `本轮发言进度：${
+    spokenNames.length ? `在你之前已发言：${spokenNames.join('、')}` : '你是本轮第一个发言的人'
+  }；${notSpokenNames.length ? `还没轮到发言：${notSpokenNames.join('、')}` : '其他人都已发言'}。
+重要：你只能针对【本轮已经发言过】或【往轮已有记录】的内容做回应或评价；对【还没发言】的玩家，绝不要假设、捏造或评价他们这一轮“说了什么”——他们还没开口。如果你是前几位发言者，就主要依据昨晚死亡结果、历史信息和自己的身份来表态。`
+
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
+${progressNote}
 要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
 如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${wolfPlanNote}

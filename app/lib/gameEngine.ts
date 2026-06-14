@@ -43,9 +43,12 @@ export function initGame(config: GameConfig): GameState {
     pendingHunter: null,
     pendingShotSource: null,
     pendingLastWords: null,
+    pendingLastWordsSource: null,
     wolfPlan: null,
     wolfPlanRound: 0,
+    publicClaims: [],
     currentSpeakerIndex: 0,
+    currentVoterIndex: 0,
     votedOutPlayerId: null,
   }
 }
@@ -159,6 +162,8 @@ export function processNightEnd(state: GameState): GameState {
     phase: 'day_announce',
     pendingHunter: null,
     pendingShotSource: null,
+    pendingLastWords: null,
+    pendingLastWordsSource: null,
   }
 
   // 猎人夜晚被狼人击杀时触发开枪；被毒死不触发，狼王夜晚死亡不触发。
@@ -178,6 +183,7 @@ export function processNightEnd(state: GameState): GameState {
   const win = checkWinCondition(newState)
   if (win) return { ...newState, winner: win, phase: 'game_over' }
 
+  // 夜晚死亡不留遗言，直接进入天亮公告
   return newState
 }
 
@@ -221,9 +227,11 @@ export function processVote(state: GameState): GameState {
       pendingHunter: null,
       pendingShotSource: null,
       pendingLastWords: null,
+      pendingLastWordsSource: null,
       phase: 'night_guard',
       round: state.round + 1,
       currentSpeakerIndex: 0,
+      currentVoterIndex: 0,
     }
   }
 
@@ -253,9 +261,11 @@ export function processVote(state: GameState): GameState {
       pendingHunter: null,
       pendingShotSource: null,
       pendingLastWords: null,
+      pendingLastWordsSource: null,
       phase: 'night_guard',
       round: state.round + 1,
       currentSpeakerIndex: 0,
+      currentVoterIndex: 0,
     }
   }
 
@@ -287,16 +297,18 @@ export function processVote(state: GameState): GameState {
     pendingHunter: needsHunterShot,
     pendingShotSource: needsHunterShot ? 'vote' : null,
     pendingLastWords: votedOut,
+    pendingLastWordsSource: 'vote',
     currentSpeakerIndex: 0,
+    currentVoterIndex: 0,
   }
 
   // 被放逐者先发表遗言，遗言结束后再处理开枪 / 胜负 / 进入黑夜
   return { ...newState, phase: 'day_last_words' }
 }
 
-// 遗言结束后的流转：先开枪（如猎人/狼王），否则判定胜负或进入下一夜。
+// 遗言结束后的流转（仅放逐遗言会走到这里）：先开枪（如猎人/狼王），否则判定胜负或进入下一夜。
 export function processLastWordsEnd(state: GameState): GameState {
-  const base: GameState = { ...state, pendingLastWords: null }
+  const base: GameState = { ...state, pendingLastWords: null, pendingLastWordsSource: null }
 
   if (base.pendingHunter) {
     return { ...base, phase: 'hunter_shoot' }
@@ -312,14 +324,15 @@ export function processHunterShoot(state: GameState, targetId: string | null): G
   const source = state.pendingShotSource
   const continueState = (s: GameState): GameState => {
     const win = checkWinCondition(s)
-    if (win) return { ...s, winner: win, phase: 'game_over', pendingHunter: null, pendingShotSource: null }
+    if (win) return { ...s, winner: win, phase: 'game_over', pendingHunter: null, pendingShotSource: null, pendingLastWordsSource: null }
     if (source === 'night') {
-      return { ...s, pendingHunter: null, pendingShotSource: null, phase: 'day_announce' }
+      return { ...s, pendingHunter: null, pendingShotSource: null, pendingLastWordsSource: null, phase: 'day_announce' }
     }
     return {
       ...s,
       pendingHunter: null,
       pendingShotSource: null,
+      pendingLastWordsSource: null,
       phase: 'night_guard',
       round: state.round + 1,
     }

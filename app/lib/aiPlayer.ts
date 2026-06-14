@@ -1,4 +1,4 @@
-import type { AiLevel, GameState, Player, Role } from './types'
+import type { AiLevel, GameState, Player, Role, WolfPlan } from './types'
 import { ROLE_NAMES, isWerewolf } from './roles'
 
 // ───────────────────────── 私有视角构造 ─────────────────────────
@@ -63,6 +63,21 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
     lines.push('')
     lines.push('【公开关键信息摘要】')
     publicSignals.forEach((s) => lines.push('- ' + s))
+  }
+  const publicClaims = state.publicClaims.slice(-16)
+  if (publicClaims.length > 0) {
+    lines.push('')
+    lines.push('【结构化公开声明】')
+    publicClaims.forEach((claim) => {
+      const claimant = state.players.find((p) => p.id === claim.claimantId)?.name ?? '未知'
+      const target = claim.targetId ? state.players.find((p) => p.id === claim.targetId)?.name : null
+      const result =
+        claim.result === 'werewolf' ? '查杀/狼人'
+          : claim.result === 'villager' ? '金水/好人'
+            : claim.result === 'unknown' ? '未知结果'
+              : ''
+      lines.push(`- 第${claim.round}天 ${claimant} 声明 ${claim.claimType}${target ? ` -> ${target}` : ''}${result ? ` = ${result}` : ''}；${claim.summary}`)
+    })
   }
 
   // —— 历史回顾 ——
@@ -279,22 +294,66 @@ function matchPlayerByName(name: string, candidates: Player[]): Player | undefin
 }
 
 // ───────────────────────── 发言 ─────────────────────────
-export async function generateAiSpeech(player: Player, state: GameState): Promise<string> {
+// 发言时让 LLM 一并产出「本段发言里公开声明的、关于自己的身份/信息」，
+// 由发言者自己声明，避免事后用关键词猜测造成张冠李戴或虚构查杀。
+export interface RawClaim {
+  claimType: 'seer' | 'witch' | 'hunter' | 'guard' | 'idiot'
+  targetName?: string | null
+  result?: 'werewolf' | 'villager' | 'unknown' | null
+}
+
+export interface AiSpeechResult {
+  content: string
+  claims: RawClaim[]
+}
+
+function sanitizeRawClaims(raw: unknown): RawClaim[] {
+  if (!Array.isArray(raw)) return []
+  const types = ['seer', 'witch', 'hunter', 'guard', 'idiot']
+  const results = ['werewolf', 'villager', 'unknown']
+  const out: RawClaim[] = []
+  for (const c of raw) {
+    if (!c || typeof c !== 'object') continue
+    const ct = (c as Record<string, unknown>).claimType
+    if (typeof ct !== 'string' || !types.includes(ct)) continue
+    const tn = (c as Record<string, unknown>).targetName
+    const rs = (c as Record<string, unknown>).result
+    out.push({
+      claimType: ct as RawClaim['claimType'],
+      targetName: typeof tn === 'string' && tn.trim() && tn !== 'null' ? tn.trim() : null,
+      result: typeof rs === 'string' && results.includes(rs) ? (rs as RawClaim['result']) : null,
+    })
+  }
+  return out
+}
+
+const CLAIM_INSTRUCTION = `同时，请如实标注你在这段话里【公开声明的、关于你自己的身份或信息】：
+- 只有当你确实跳了某身份、或报了验人/用药结果时才填 claims；普通分析、只是怀疑别人、不亮身份时 claims 必须是空数组 []。
+- claimType 必须是 seer/witch/hunter/guard/idiot 之一；targetName 是涉及的玩家名或 null；result 是 werewolf/villager/unknown 或 null。
+- 例：跳预言家并报查杀小明 → {"claimType":"seer","targetName":"小明","result":"werewolf"}；报金水小红 → result 填 villager。`
+
+export async function generateAiSpeech(player: Player, state: GameState): Promise<AiSpeechResult> {
   const perspective = buildPlayerPerspective(player, state)
   const wolfPlanNote =
     isWerewolf(player.role) && state.wolfPlan && state.wolfPlanRound === state.round
-      ? `\n\n【狼队昨晚商定的作战计划（仅狼队知道，作为参考而非死命令）】\n${state.wolfPlan}\n注意：这是昨晚在不知道天亮结果时预先定的计划。如果天亮后的死亡情况、其他人的发言或当前票型与计划的设想不符，你要临场灵活调整、随机应变，不必机械照搬；用你自己的话表达，绝不能照搬原文，也不要暴露存在“计划”。`
+      ? `\n\n【狼队昨晚商定的作战计划（仅狼队知道，作为参考而非死命令）】\n${formatWolfPlanForPlayer(state.wolfPlan, player, state)}\n注意：这是昨晚在不知道天亮结果时预先定的计划。如果天亮后的死亡情况、其他人的发言或当前票型与计划的设想不符，你要临场灵活调整、随机应变，不必机械照搬；用你自己的话表达，绝不能照搬原文，也不要暴露存在“计划”。`
       : ''
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
 要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
 如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${wolfPlanNote}
-直接输出发言内容，不要加前缀。`
+${CLAIM_INSTRUCTION}
+返回 JSON：{"speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
-    return await callAi(getInstruction(player), perspective, task)
+    const parsed = await callAiJson(getInstruction(player), perspective, task)
+    const content =
+      typeof parsed.speech === 'string' && parsed.speech.trim()
+        ? parsed.speech.trim()
+        : '我先听听大家怎么说。'
+    return { content, claims: sanitizeRawClaims(parsed.claims) }
   } catch {
-    return '我再听听大家怎么说，先过。'
+    return { content: '我再听听大家怎么说，先过。', claims: [] }
   }
 }
 
@@ -302,31 +361,110 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
 // 真实规则：白天狼人无法私聊，协商只能发生在夜晚。狼队睁眼时商定一份次日计划
 // （谁悍跳/谁深水/推谁/是否倒钩），但此时【还不知道天亮后的实际死亡结果】。
 // 白天各 AI 狼把它当作参考、并根据真实局势临场应变（见 generateAiSpeech）。
-export async function generateWolfPlan(wolves: Player[], state: GameState): Promise<string> {
-  if (wolves.length === 0) return ''
+function planPlayerName(state: GameState, id?: string | null): string {
+  if (!id) return '无'
+  return state.players.find((p) => p.id === id)?.name ?? '未知'
+}
+
+function formatWolfPlanForPlayer(plan: WolfPlan, player: Player, state: GameState): string {
+  const ownPoint = plan.talkingPointsByWolfId[player.id] || '按狼队整体策略伪装好人，结合场上局势临场应变。'
+  return [
+    `整体策略：${plan.tactic}`,
+    `主推目标：${planPlayerName(state, plan.pushTargetId)}`,
+    `悍跳狼：${planPlayerName(state, plan.fakeClaimWolfId)}`,
+    `保护同伴：${planPlayerName(state, plan.protectWolfId)}`,
+    `倒钩/卖队友对象：${planPlayerName(state, plan.busWolfId)}`,
+    `你的个人话术：${ownPoint}`,
+    `备注：${plan.notes}`,
+  ].join('\n')
+}
+
+function normalizeWolfPlan(raw: Record<string, unknown>, wolves: Player[], state: GameState): WolfPlan {
+  const validWolfIds = new Set(wolves.map((w) => w.id))
+  const validPlayerIds = new Set(state.players.map((p) => p.id))
+  const tacticValues: WolfPlan['tactic'][] = ['fake_claim', 'deep_cover', 'bus', 'rush_vote', 'misdirect']
+  const tactic = tacticValues.includes(raw.tactic as WolfPlan['tactic'])
+    ? raw.tactic as WolfPlan['tactic']
+    : 'misdirect'
+  const wolfId = (value: unknown): string | null => {
+    const id = typeof value === 'string' ? value : null
+    return id && validWolfIds.has(id) ? id : null
+  }
+  const playerId = (value: unknown): string | null => {
+    const id = typeof value === 'string' ? value : null
+    return id && validPlayerIds.has(id) ? id : null
+  }
+  const rawPoints =
+    raw.talkingPointsByWolfId && typeof raw.talkingPointsByWolfId === 'object' && !Array.isArray(raw.talkingPointsByWolfId)
+      ? raw.talkingPointsByWolfId as Record<string, unknown>
+      : {}
+  const talkingPointsByWolfId: Record<string, string> = {}
+  for (const wolf of wolves) {
+    const point = rawPoints[wolf.id]
+    talkingPointsByWolfId[wolf.id] =
+      typeof point === 'string' && point.trim()
+        ? point.trim().slice(0, 120)
+        : '伪装好人，结合发言和票型找机会推动错误焦点。'
+  }
+  return {
+    round: state.round,
+    tactic,
+    fakeClaimWolfId: wolfId(raw.fakeClaimWolfId),
+    pushTargetId: playerId(raw.pushTargetId),
+    protectWolfId: wolfId(raw.protectWolfId),
+    busWolfId: wolfId(raw.busWolfId),
+    talkingPointsByWolfId,
+    notes: typeof raw.notes === 'string' ? raw.notes.slice(0, 160) : '保持发言一致，避免暴露狼队视角。',
+  }
+}
+
+function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
+  const candidates = state.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+  const pushTarget = candidates[0]?.id ?? null
+  return {
+    round: state.round,
+    tactic: 'misdirect',
+    fakeClaimWolfId: null,
+    pushTargetId: pushTarget,
+    protectWolfId: wolves[0]?.id ?? null,
+    busWolfId: null,
+    talkingPointsByWolfId: Object.fromEntries(
+      wolves.map((w) => [w.id, `伪装好人，质疑 ${pushTarget ? planPlayerName(state, pushTarget) : '强势好人'} 的发言逻辑。`])
+    ),
+    notes: '统一把焦点推向好人，避免互相矛盾。',
+  }
+}
+
+export async function generateWolfPlan(wolves: Player[], state: GameState): Promise<WolfPlan> {
+  if (wolves.length === 0) return fallbackWolfPlan(wolves, state)
   const leader = wolves[0]
-  const wolfNames = wolves.map((w) => w.name).join('、')
+  const wolfNames = wolves.map((w) => `${w.name}(${w.id})`).join('、')
+  const aliveNames = state.players.filter((p) => p.isAlive).map((p) => `${p.name}(${p.id})`).join('、')
   const killId = state.nightActions
     .filter((a) => a.round === state.round && a.actionType === 'kill')
     .map((a) => a.targetId)[0]
   const killName = killId ? state.players.find((p) => p.id === killId)?.name : null
   const task = `现在是第${state.round}天夜晚，狼队睁眼商议明天白天的作战计划。${killName ? `你们今晚决定击杀【${killName}】（但天亮前并不知道是否击杀成功，也不知道女巫/守卫是否干预）。` : ''}
 存活狼队成员：${wolfNames}。
-请在【还不知道天亮后实际死亡结果】的前提下，结合已有发言和局势，预先商定一个简短、可执行的次日计划：
-1) 谁悍跳预言家或起跳神职（若需要），谁深水扮普通好人；
-2) 明天重点把哪个好人推出局（嫁祸目标）；
-3) 是否安排有人倒钩（假意踩狼同伴）来骗取信任；
-4) 统一话术基调，避免狼队发言互相矛盾或暴露同伴。
-注意：这只是预案，白天可能要根据真实死亡和发言临场调整。用 3-4 条要点中文输出，简洁直接，不要解释。`
+存活玩家：${aliveNames}。
+请在【还不知道天亮后实际死亡结果】的前提下，结合已有发言和局势，预先商定一个结构化计划。
+字段说明：
+- tactic 必须是 fake_claim/deep_cover/bus/rush_vote/misdirect 之一。
+- fakeClaimWolfId/protectWolfId/busWolfId 必须填狼人的 id 或 null。
+- pushTargetId 必须填存活玩家 id 或 null。
+- talkingPointsByWolfId 必须给每个狼 id 一句个人话术，避免两只狼做同一件事。
+返回 JSON：{"tactic":"misdirect","fakeClaimWolfId":null,"pushTargetId":"玩家id或null","protectWolfId":"狼人id或null","busWolfId":"狼人id或null","talkingPointsByWolfId":{"狼人id":"个人话术"},"notes":"简短备注"}`
   try {
-    return await callAi(getInstruction(leader), buildPlayerPerspective(leader, state), task)
+    const parsed = await callAiJson(getInstruction(leader), buildPlayerPerspective(leader, state), task)
+    return normalizeWolfPlan(parsed, wolves, state)
   } catch {
-    return ''
+    return fallbackWolfPlan(wolves, state)
   }
 }
 
 // ───────────────────────── 遗言 ─────────────────────────
-export async function generateLastWords(player: Player, state: GameState): Promise<string> {
+// 仅被投票放逐者有遗言（夜晚死亡不留遗言）。同样让 LLM 一并产出结构化 claim。
+export async function generateLastWords(player: Player, state: GameState): Promise<AiSpeechResult> {
   const perspective = buildPlayerPerspective(player, state)
   const camp = isWerewolf(player.role)
     ? '你是狼人，遗言可以继续伪装、误导好人、嫁祸他人或为狼队争取利益（比如反咬可信好人、扰乱归票）。'
@@ -341,11 +479,17 @@ export async function generateLastWords(player: Player, state: GameState): Promi
 请以「${player.name}」的身份发表遗言（第一人称、100字以内、中文）。
 ${camp}
 ${seerNote}
-直接输出遗言内容，不要加前缀。`
+${CLAIM_INSTRUCTION}
+返回 JSON：{"speech":"你的遗言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
-    return await callAi(getInstruction(player), perspective, task)
+    const parsed = await callAiJson(getInstruction(player), perspective, task)
+    const content =
+      typeof parsed.speech === 'string' && parsed.speech.trim()
+        ? parsed.speech.trim()
+        : '我没什么好说的了，大家好好分析，找出狼人。'
+    return { content, claims: sanitizeRawClaims(parsed.claims) }
   } catch {
-    return '我没什么好说的了，大家好好分析，找出狼人。'
+    return { content: '我没什么好说的了，大家好好分析，找出狼人。', claims: [] }
   }
 }
 

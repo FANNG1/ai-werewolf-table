@@ -28,7 +28,7 @@ export function DayPhase({
   onSubmitLastWords,
   onProceedLastWords,
 }: Props) {
-  const { phase, players, speeches, votes, round, nightDeaths, pendingHunter, pendingLastWords } = state
+  const { phase, players, speeches, votes, round, nightDeaths, pendingHunter, pendingLastWords, pendingLastWordsSource } = state
   const [humanSpeech, setHumanSpeech] = useState('')
   const [humanLastWords, setHumanLastWords] = useState('')
   const [humanShootTarget, setHumanShootTarget] = useState<string | null>(null)
@@ -104,7 +104,7 @@ export function DayPhase({
           {dying?.name} 的遗言
         </h2>
         <p className="text-purple-400 text-sm mb-6 text-center">
-          被放逐出局，请发表最后的发言
+          {pendingLastWordsSource === 'night' ? '昨夜出局，请发表遗言' : '被放逐出局，请发表最后的发言'}
         </p>
 
         {isDyingHuman && !lwSpeech ? (
@@ -338,6 +338,15 @@ export function DayPhase({
       tally[v.targetId] = (tally[v.targetId] || 0) + 1
     }
     const eligibleVoters = alivePlayers.filter(p => !(p.role === 'idiot' && p.idiotUsed))
+    const currentVoter =
+      eligibleVoters.length > 0 ? eligibleVoters[state.currentVoterIndex % eligibleVoters.length] : null
+    const isHumanTurnToVote =
+      !aiThinking &&
+      !!humanPlayer?.isAlive &&
+      currentVoter?.id === humanPlayer.id &&
+      !humanHasVoted &&
+      !(humanPlayer.role === 'idiot' && humanPlayer.idiotUsed)
+    const allVotesIn = roundVotes.length === eligibleVoters.length
 
     return (
       <div className="bg-gray-900 min-h-screen p-4">
@@ -353,7 +362,7 @@ export function DayPhase({
             <PlayerCard
               key={p.id}
               player={p}
-              selectable={!humanHasVoted && p.id !== humanPlayer?.id && humanPlayer?.isAlive && !(humanPlayer.role === 'idiot' && humanPlayer.idiotUsed)}
+              selectable={isHumanTurnToVote && p.id !== humanPlayer?.id}
               selected={humanVoteTarget === p.id}
               onClick={() => setHumanVoteTarget(humanVoteTarget === p.id ? null : p.id)}
               voteCount={tally[p.id]}
@@ -362,7 +371,7 @@ export function DayPhase({
           ))}
         </div>
 
-        {!humanHasVoted && humanPlayer?.isAlive && !(humanPlayer.role === 'idiot' && humanPlayer.idiotUsed) && (
+        {isHumanTurnToVote && (
           <button
             onClick={() => {
               if (humanVoteTarget) onVote(humanVoteTarget)
@@ -372,6 +381,12 @@ export function DayPhase({
           >
             投票给 {humanVoteTarget ? players.find(p => p.id === humanVoteTarget)?.name : '...'}
           </button>
+        )}
+
+        {!isHumanTurnToVote && !allVotesIn && !aiThinking && (
+          <div className="text-center text-gray-500 text-xs py-2">
+            等待 {currentVoter?.name ?? '其他玩家'} 投票...
+          </div>
         )}
 
         {aiThinking && (
@@ -387,7 +402,7 @@ export function DayPhase({
         )}
 
         {/* 公布结果：人类已投（或无需投票）且 AI 投票完成 */}
-        {(humanHasVoted || !humanPlayer?.isAlive || (humanPlayer.role === 'idiot' && humanPlayer.idiotUsed)) && !aiThinking && (
+        {allVotesIn && !aiThinking && (
           <button
             onClick={onSubmitVote}
             className="w-full bg-red-900 hover:bg-red-800 text-white rounded-xl py-3 font-semibold mt-2"

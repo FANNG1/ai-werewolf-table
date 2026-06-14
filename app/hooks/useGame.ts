@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { decideNightAction, decideShotTarget, decideWerewolfKill, decideWitchAction, generateAiSpeech, generateAiVote, generateLastWords, generateWolfPlan } from '../lib/aiPlayer'
+import type { RawClaim } from '../lib/aiPlayer'
 import {
   checkWinCondition,
   getAliveWerewolves,
@@ -14,7 +15,7 @@ import {
   processVote,
 } from '../lib/gameEngine'
 import { isWerewolf } from '../lib/roles'
-import type { AiLevel, GameConfig, GameState, NightAction, Phase, Role } from '../lib/types'
+import type { AiLevel, GameConfig, GameState, NightAction, Phase, PublicClaim, Role } from '../lib/types'
 
 function genId() {
   return Math.random().toString(36).slice(2, 9)
@@ -31,12 +32,135 @@ function getInitialSpeakerIndex(state: GameState): number {
   return aliveCount > 0 ? (state.round - 1) % aliveCount : 0
 }
 
-// 狼队夜间协商：所有狼为 AI 时，在夜里（不知道天亮结果前）预先商定次日计划。
-// 人类狼是队长，AI 队友白天临场跟，不另行生成计划。每个轮次最多生成一次。
+function getEligibleVoters(state: GameState) {
+  return state.players.filter((p) => p.isAlive && !(p.role === 'idiot' && p.idiotUsed))
+}
+
+function getInitialVoterIndex(state: GameState): number {
+  const voters = getEligibleVoters(state)
+  return voters.length > 0 ? (state.round - 1) % voters.length : 0
+}
+
+// 把 AI 发言时自己声明的结构化 claim 转成 PublicClaim（targetName → 玩家 id）。
+// 由发言者自报，不再事后猜测，避免张冠李戴和虚构查杀。
+function rawClaimsToPublic(
+  raw: RawClaim[],
+  speech: { id: string; playerId: string; round: number },
+  state: GameState
+): PublicClaim[] {
+  return raw.map((c) => {
+    const target = c.targetName
+      ? state.players.find(
+          (p) => p.id !== speech.playerId && (c.targetName!.includes(p.name) || p.name.includes(c.targetName!))
+        )
+      : undefined
+    const resultText =
+      c.claimType === 'seer'
+        ? c.result === 'werewolf'
+          ? '查杀'
+          : c.result === 'villager'
+            ? '金水'
+            : '未知'
+        : ''
+    const summary =
+      c.claimType === 'seer'
+        ? target
+          ? `声称预言家：${target.name}=${resultText}`
+          : '声称预言家'
+        : c.claimType === 'witch'
+          ? target
+            ? `声称女巫信息：涉及${target.name}`
+            : '声称女巫'
+          : `声称${c.claimType === 'hunter' ? '猎人' : c.claimType === 'guard' ? '守卫' : '白痴'}`
+    return {
+      id: genId(),
+      round: speech.round,
+      claimantId: speech.playerId,
+      claimType: c.claimType,
+      targetId: target?.id ?? null,
+      result: c.result ?? null,
+      rawSpeechId: speech.id,
+      summary,
+    }
+  })
+}
+
+// 人类发言/遗言的 claim 提取：要求第一人称自跳标记（带否定词防护），只在高把握时记录，
+// 宁可漏记也不虚构——避免把“怀疑别人是预言家”误记成“自己跳预言家”。
+function extractPublicClaims(state: GameState, speech: { id: string; playerId: string; content: string; round: number }): PublicClaim[] {
+  const content = speech.content
+  const others = state.players.filter((p) => p.id !== speech.playerId)
+  const claims: PublicClaim[] = []
+  const addClaim = (claim: Omit<PublicClaim, 'id' | 'round' | 'claimantId' | 'rawSpeechId'>) => {
+    claims.push({ id: genId(), round: speech.round, claimantId: speech.playerId, rawSpeechId: speech.id, ...claim })
+  }
+
+  // 第一人称自跳：标记必须连续出现，且前面不是否定词
+  const selfClaim = (markers: string[]): boolean =>
+    markers.some((m) => {
+      let from = 0
+      while (true) {
+        const i = content.indexOf(m, from)
+        if (i < 0) return false
+        const before = content.slice(Math.max(0, i - 2), i)
+        if (!/[不没非别假]/.test(before)) return true
+        from = i + m.length
+      }
+    })
+
+  // 在关键词附近（±6 字窗口）找被提到的其他玩家名，找不到再退回全文首个名字
+  const nameNear = (keywords: string[]) => {
+    for (const kw of keywords) {
+      let i = content.indexOf(kw)
+      while (i >= 0) {
+        const window = content.slice(Math.max(0, i - 6), i + kw.length + 6)
+        const hit = others.find((p) => window.includes(p.name))
+        if (hit) return hit
+        i = content.indexOf(kw, i + kw.length)
+      }
+    }
+    return others.find((p) => content.includes(p.name))
+  }
+
+  if (selfClaim(['我是预言家', '我跳预言家', '我就是预言家', '我是预', '我验', '我查验', '我昨晚验', '我报查杀', '我的金水', '我查杀'])) {
+    const isKill = content.includes('查杀')
+    const isGold = content.includes('金水')
+    const target = isKill || isGold ? nameNear(['查杀', '金水', '验']) : undefined
+    addClaim({
+      claimType: 'seer',
+      targetId: target?.id ?? null,
+      result: isKill ? 'werewolf' : isGold ? 'villager' : 'unknown',
+      summary: target ? `声称预言家：${target.name}=${isKill ? '查杀' : isGold ? '金水' : '未知'}` : '声称预言家',
+    })
+  }
+  if (selfClaim(['我是女巫', '我是女', '我用了解药', '我用了毒药', '我毒了', '我救了', '我的银水'])) {
+    const isSilver = content.includes('银水')
+    const target = isSilver ? nameNear(['银水', '救']) : nameNear(['毒'])
+    addClaim({
+      claimType: 'witch',
+      targetId: target?.id ?? null,
+      result: isSilver ? 'villager' : 'unknown',
+      summary: target ? `声称女巫信息：涉及${target.name}` : '声称女巫',
+    })
+  }
+  if (selfClaim(['我是猎人', '我是猎'])) addClaim({ claimType: 'hunter', targetId: null, result: null, summary: '声称猎人' })
+  if (selfClaim(['我是守卫', '我守了', '我守的'])) {
+    const target = nameNear(['守'])
+    addClaim({ claimType: 'guard', targetId: target?.id ?? null, result: null, summary: target ? `声称守卫：守${target.name}` : '声称守卫' })
+  }
+  if (selfClaim(['我是白痴', '我是白'])) addClaim({ claimType: 'idiot', targetId: null, result: null, summary: '声称白痴' })
+
+  return claims
+}
+
+// 狼队夜间协商：在夜里（不知道天亮结果前）预先商定次日计划。
+// 每个轮次最多生成一次；有人类狼时也生成，AI 队友白天会按计划配合。
 async function maybeGenerateWolfPlan(s: GameState): Promise<GameState> {
   if (s.wolfPlanRound === s.round) return s
   const wolves = getAliveWerewolves(s)
-  if (wolves.length === 0 || wolves.some((w) => w.isHuman)) return s
+  if (wolves.length === 0) return s
+  const hasKill = s.nightActions.some((a) => a.round === s.round && a.actionType === 'kill')
+  if (!hasKill) return s
   const plan = await generateWolfPlan(wolves, s)
   return { ...s, wolfPlan: plan, wolfPlanRound: s.round }
 }
@@ -143,9 +267,11 @@ export function useGame() {
           round: prev.round,
           reasoning,
         }
+        const publicClaims = extractPublicClaims(prev, speech)
         return {
           ...prev,
           speeches: [...prev.speeches, speech],
+          publicClaims: [...prev.publicClaims, ...publicClaims],
           currentSpeakerIndex: nextSpeakerIndex,
           logs: [
             ...prev.logs,
@@ -178,9 +304,16 @@ export function useGame() {
         (v) => v.voterId === voterId && v.round === prev.round
       )
       if (existing) return prev
+      const voters = getEligibleVoters(prev)
+      const voterIndex = voters.findIndex((p) => p.id === voterId)
+      const nextVoterIndex =
+        prev.phase === 'day_vote' && voterIndex >= 0 && voters.length > 0
+          ? (voterIndex + 1) % voters.length
+          : prev.currentVoterIndex
       return {
         ...prev,
         votes: [...prev.votes, { voterId, targetId, round: prev.round }],
+        currentVoterIndex: nextVoterIndex,
       }
     })
   }, [])
@@ -240,6 +373,9 @@ export function useGame() {
               }
 
               let s = prev
+              if (phase !== 'night_werewolf') {
+                s = await maybeGenerateWolfPlan(s)
+              }
               if (phase === 'night_guard') {
                 const guard = s.players.find((p) => p.isAlive && p.role === 'guard' && !p.isHuman)
                 if (guard) {
@@ -380,7 +516,7 @@ export function useGame() {
             return
           }
 
-          const content = await generateAiSpeech(player, localState)
+          const { content, claims } = await generateAiSpeech(player, localState)
           const speech = {
             id: genId(),
             playerId: player.id,
@@ -396,12 +532,14 @@ export function useGame() {
             data: { playerId: player.id, content },
             timestamp: Date.now(),
           }
+          const publicClaims = rawClaimsToPublic(claims, speech, localState)
           const nextIndex = (index + 1) % alivePlayers.length
 
           spokenIds.add(player.id)
           localState = {
             ...localState,
             speeches: [...localState.speeches, speech],
+            publicClaims: [...localState.publicClaims, ...publicClaims],
             logs: [...localState.logs, log],
             currentSpeakerIndex: nextIndex,
           }
@@ -410,6 +548,7 @@ export function useGame() {
             return {
               ...prev,
               speeches: [...prev.speeches, speech],
+              publicClaims: [...prev.publicClaims, ...publicClaims],
               logs: [...prev.logs, log],
               currentSpeakerIndex: nextIndex,
             }
@@ -432,28 +571,56 @@ export function useGame() {
     setAiThinking(true)
     try {
       const round = currentState.round
-      // 顺序公投：AI 依次投票，后投者能看到已经投出的票型（跟票/归票/抗推）
-      const voters = currentState.players.filter(
-        (p) => p.isAlive && !p.isHuman && !(p.role === 'idiot' && p.idiotUsed)
+      const voters = getEligibleVoters(currentState)
+      if (voters.length === 0) return
+
+      const votedIds = new Set(
+        currentState.votes.filter((v) => v.round === round).map((v) => v.voterId)
       )
+      if (voters.every((p) => votedIds.has(p.id))) return
+
       let localState = currentState
-      for (const voter of voters) {
-        if (localState.votes.some((v) => v.voterId === voter.id && v.round === round)) continue
+      let index = currentState.currentVoterIndex % voters.length
+      let visited = 0
+
+      while (visited < voters.length) {
+        const voter = voters[index]
+        if (votedIds.has(voter.id)) {
+          index = (index + 1) % voters.length
+          visited += 1
+          continue
+        }
+
+        if (voter.isHuman) {
+          setState((prev) => prev ? { ...prev, currentVoterIndex: index } : prev)
+          return
+        }
+
         const candidates = localState.players.filter((p) => p.isAlive && p.id !== voter.id)
-        if (candidates.length === 0) continue
+        if (candidates.length === 0) {
+          index = (index + 1) % voters.length
+          visited += 1
+          continue
+        }
 
         let targetId = await generateAiVote(voter, localState, candidates)
         if (!targetId) {
           targetId = candidates[Math.floor(Math.random() * candidates.length)].id
         }
         const vote = { voterId: voter.id, targetId, round }
-        localState = { ...localState, votes: [...localState.votes, vote] }
+        const nextIndex = (index + 1) % voters.length
+        votedIds.add(voter.id)
+        localState = { ...localState, votes: [...localState.votes, vote], currentVoterIndex: nextIndex }
         setState((prev) => {
           if (!prev || prev.phase !== 'day_vote' || prev.round !== round) return prev
           if (prev.votes.some((v) => v.voterId === voter.id && v.round === round)) return prev
-          return { ...prev, votes: [...prev.votes, vote] }
+          return { ...prev, votes: [...prev.votes, vote], currentVoterIndex: nextIndex }
         })
+
+        index = nextIndex
+        visited += 1
       }
+      setState((prev) => prev ? { ...prev, currentVoterIndex: index } : prev)
     } finally {
       processingRef.current = false
       setAiThinking(false)
@@ -512,6 +679,8 @@ export function useGame() {
         phase: nextPhase,
         currentSpeakerIndex:
           nextPhase === 'day_discuss' ? getInitialSpeakerIndex(prev) : prev.currentSpeakerIndex,
+        currentVoterIndex:
+          nextPhase === 'day_vote' ? getInitialVoterIndex(prev) : prev.currentVoterIndex,
       }
     })
   }, [])
@@ -565,7 +734,7 @@ export function useGame() {
     processingRef.current = true
     setAiThinking(true)
     try {
-      const content = await generateLastWords(dying, currentState)
+      const { content, claims } = await generateLastWords(dying, currentState)
       setState((prev) => {
         if (!prev || prev.phase !== 'day_last_words' || prev.pendingLastWords !== dying.id) return prev
         if (prev.speeches.some((s) => s.playerId === dying.id && s.isLastWords && s.round === prev.round)) {
@@ -579,6 +748,7 @@ export function useGame() {
           round: prev.round,
           isLastWords: true,
         }
+        const publicClaims = rawClaimsToPublic(claims, speech, prev)
         const log = {
           id: genId(),
           type: 'speech' as const,
@@ -587,7 +757,12 @@ export function useGame() {
           data: { playerId: dying.id, content, lastWords: true },
           timestamp: Date.now(),
         }
-        return { ...prev, speeches: [...prev.speeches, speech], logs: [...prev.logs, log] }
+        return {
+          ...prev,
+          speeches: [...prev.speeches, speech],
+          publicClaims: [...prev.publicClaims, ...publicClaims],
+          logs: [...prev.logs, log],
+        }
       })
     } finally {
       processingRef.current = false
@@ -614,6 +789,7 @@ export function useGame() {
           round: prev.round,
           isLastWords: true,
         }
+        const publicClaims = extractPublicClaims(prev, speech)
         const log = {
           id: genId(),
           type: 'speech' as const,
@@ -622,7 +798,12 @@ export function useGame() {
           data: { playerId: prev.pendingLastWords, content: content.trim(), lastWords: true },
           timestamp: Date.now(),
         }
-        next = { ...prev, speeches: [...prev.speeches, speech], logs: [...prev.logs, log] }
+        next = {
+          ...prev,
+          speeches: [...prev.speeches, speech],
+          publicClaims: [...prev.publicClaims, ...publicClaims],
+          logs: [...prev.logs, log],
+        }
       }
       return processLastWordsEnd(next)
     })

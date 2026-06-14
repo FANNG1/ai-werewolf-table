@@ -60,6 +60,28 @@ export interface Vote {
   round: number
 }
 
+export interface WolfPlan {
+  round: number
+  tactic: 'fake_claim' | 'deep_cover' | 'bus' | 'rush_vote' | 'misdirect'
+  fakeClaimWolfId?: string | null
+  pushTargetId?: string | null
+  protectWolfId?: string | null
+  busWolfId?: string | null
+  talkingPointsByWolfId: Record<string, string>
+  notes: string
+}
+
+export interface PublicClaim {
+  id: string
+  round: number
+  claimantId: string
+  claimType: 'seer' | 'witch' | 'hunter' | 'guard' | 'idiot'
+  targetId?: string | null
+  result?: 'werewolf' | 'villager' | 'unknown' | null
+  rawSpeechId: string
+  summary: string
+}
+
 export interface GameLog {
   id: string
   type: 'speech' | 'vote' | 'night_result' | 'death' | 'phase_change' | 'action'
@@ -94,8 +116,11 @@ export interface GameState {
   pendingHunter: string | null
   pendingShotSource: 'night' | 'vote' | null
   pendingLastWords: string | null
-  wolfPlan: string | null
+  pendingLastWordsSource: 'night' | 'vote' | null
+  wolfPlan: WolfPlan | null
   wolfPlanRound: number
+  publicClaims: PublicClaim[]
   currentSpeakerIndex: number
+  currentVoterIndex: number
   votedOutPlayerId: string | null
 }

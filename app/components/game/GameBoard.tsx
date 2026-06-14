@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { isWerewolf, ROLE_EMOJIS, ROLE_NAMES } from '../../lib/roles'
 import type { GameState, Phase } from '../../lib/types'
 import { DayPhase } from './DayPhase'
@@ -51,8 +51,6 @@ export function GameBoard({
   const [showRoleModal, setShowRoleModal] = useState(false)
   const humanPlayer = players.find((p) => p.isHuman)
   const isNight = phase.startsWith('night')
-  // Track which round's vote has already been triggered to avoid double-fire
-  const triggeredVoteRound = useRef(-1)
 
   // Auto-trigger AI speeches while the current speaker is an AI player.
   useEffect(() => {
@@ -70,16 +68,17 @@ export function GameBoard({
     }
   }, [phase, round, state.currentSpeakerIndex, state.speeches.length, aiThinking]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 顺序公投：若人类有投票权，等人类先投，AI 再依次跟票；否则 AI 直接开投。每轮触发一次。
+  // 顺序公投：轮到 AI 时自动投；轮到真人时等待用户输入。
   useEffect(() => {
-    if (phase !== 'day_vote' || triggeredVoteRound.current === round) return
-    const human = players.find((p) => p.isHuman)
-    const humanEligible = !!human?.isAlive && !(human.role === 'idiot' && human.idiotUsed)
-    const humanVoted = state.votes.some((v) => v.voterId === human?.id && v.round === round)
-    if (humanEligible && !humanVoted) return // 等人类先投
-    triggeredVoteRound.current = round
+    if (phase !== 'day_vote' || aiThinking) return
+    const voters = state.players.filter((p) => p.isAlive && !(p.role === 'idiot' && p.idiotUsed))
+    if (voters.length === 0) return
+    const votedIds = new Set(state.votes.filter((v) => v.round === round).map((v) => v.voterId))
+    if (voters.every((p) => votedIds.has(p.id))) return
+    const currentVoter = voters[state.currentVoterIndex % voters.length]
+    if (!currentVoter || currentVoter.isHuman || votedIds.has(currentVoter.id)) return
     triggerAiVotes(state)
-  }, [phase, round, state.votes.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase, round, state.currentVoterIndex, state.votes.length, aiThinking]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 自动触发 AI 被放逐者的遗言
   useEffect(() => {

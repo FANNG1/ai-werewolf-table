@@ -1,5 +1,6 @@
 import type { AiLevel, GameState, Player, Role, WolfPlan } from './types'
 import { ROLE_NAMES, isWerewolf } from './roles'
+import { computeRoundStrategy } from './strategy'
 
 // ───────────────────────── 私有视角构造 ─────────────────────────
 // 每个 AI 只能看到：公开信息（发言、死亡公告、投票、出局翻牌）+ 自己角色的私密信息。
@@ -353,12 +354,18 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
   }；${notSpokenNames.length ? `还没轮到发言：${notSpokenNames.join('、')}` : '其他人都已发言'}。
 重要：你只能针对【本轮已经发言过】或【往轮已有记录】的内容做回应或评价；对【还没发言】的玩家，绝不要假设、捏造或评价他们这一轮“说了什么”——他们还没开口。如果你是前几位发言者，就主要依据昨晚死亡结果、历史信息和自己的身份来表态。`
 
+  // 回合前策略：硬规则定下本轮该承担的任务，优先级高于下面的一般建议
+  const strategy = computeRoundStrategy(player, state)
+  const strategyNote = strategy
+    ? `\n\n【本轮你的角色任务（最高优先级，务必执行）】\n${strategy.talkingGoal}`
+    : ''
+
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
 ${progressNote}
 要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
-如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${wolfPlanNote}
+如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${wolfPlanNote}
 ${CLAIM_INSTRUCTION}
 返回 JSON：{"speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {

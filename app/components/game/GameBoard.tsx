@@ -131,12 +131,14 @@ export function GameBoard({
   const isDayPhase = ['day_announce', 'day_discuss', 'day_vote', 'day_last_words', 'hunter_shoot'].includes(phase)
 
   return (
-    <div className={`min-h-screen flex flex-col ${isNight ? 'bg-indigo-950' : 'bg-gray-900'}`}>
-      <PhaseHeader phase={phase} round={round} />
+    <div className={`h-[100dvh] flex flex-col overflow-hidden ${isNight ? 'bg-indigo-950' : 'bg-gray-900'}`}>
+      <div className="flex-shrink-0">
+        <PhaseHeader phase={phase} round={round} />
+      </div>
 
       {/* Player overview bar (collapsed during night) */}
       {!isNightPhase && (
-        <div className="px-3 py-2 overflow-x-auto">
+        <div className="px-3 py-2 overflow-x-auto flex-shrink-0">
           <div className="flex gap-2 min-w-max">
             {players.map((p) => (
               <div
@@ -155,8 +157,8 @@ export function GameBoard({
         </div>
       )}
 
-      {/* Main phase content */}
-      <div className="flex-1">
+      {/* Main phase content — fills remaining height; phases scroll internally */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {isNightPhase && (
           <NightPhase
             state={state}

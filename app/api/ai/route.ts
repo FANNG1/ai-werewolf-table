@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(req: NextRequest) {
   try {
-    const { instruction, perspective, task, json } = await req.json()
+    const { instruction, perspective, task, json, maxTokens } = await req.json()
 
     const body: Record<string, unknown> = {
       model: 'deepseek-chat',
-      // JSON 决策（投票/夜晚行动）只需短输出；自由发言给多一些
-      max_tokens: json ? 320 : 280,
+      // 调用方可按类型指定预算：发言/遗言/计划需要更多 token；短决策（投票/夜晚）保持精简
+      max_tokens: typeof maxTokens === 'number' ? maxTokens : json ? 320 : 280,
       messages: [
         { role: 'system', content: instruction },
         { role: 'user', content: `${perspective}\n\n${task}` },

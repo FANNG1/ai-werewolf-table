@@ -252,12 +252,13 @@ async function callAi(
   instruction: string,
   perspective: string,
   task: string,
-  json = false
+  json = false,
+  maxTokens?: number
 ): Promise<string> {
   const resp = await fetch('/api/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ instruction, perspective, task, json }),
+    body: JSON.stringify({ instruction, perspective, task, json, maxTokens }),
   })
   if (!resp.ok) throw new Error('AI 调用失败')
   const data = await resp.json()
@@ -267,14 +268,15 @@ async function callAi(
 async function callAiJson(
   instruction: string,
   perspective: string,
-  task: string
+  task: string,
+  maxTokens?: number
 ): Promise<Record<string, unknown>> {
   let lastRaw = ''
   for (let i = 0; i < 2; i++) {
     const retryHint = i === 0
       ? ''
       : `\n\n上一次输出不是合法 JSON。请只返回一个 JSON 对象，不要 Markdown，不要解释。上一次输出：${lastRaw.slice(0, 200)}`
-    lastRaw = await callAi(instruction, perspective, task + retryHint, true)
+    lastRaw = await callAi(instruction, perspective, task + retryHint, true, maxTokens)
     try {
       const parsed = JSON.parse(lastRaw)
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -360,7 +362,7 @@ ${progressNote}
 ${CLAIM_INSTRUCTION}
 返回 JSON：{"speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
-    const parsed = await callAiJson(getInstruction(player), perspective, task)
+    const parsed = await callAiJson(getInstruction(player), perspective, task, 700)
     const content =
       typeof parsed.speech === 'string' && parsed.speech.trim()
         ? parsed.speech.trim()
@@ -469,7 +471,7 @@ export async function generateWolfPlan(wolves: Player[], state: GameState): Prom
 - talkingPointsByWolfId 必须给每个狼 id 一句个人话术，避免两只狼做同一件事。
 返回 JSON：{"tactic":"misdirect","fakeClaimWolfId":null,"pushTargetId":"玩家id或null","protectWolfId":"狼人id或null","busWolfId":"狼人id或null","talkingPointsByWolfId":{"狼人id":"个人话术"},"notes":"简短备注"}`
   try {
-    const parsed = await callAiJson(getInstruction(leader), buildPlayerPerspective(leader, state), task)
+    const parsed = await callAiJson(getInstruction(leader), buildPlayerPerspective(leader, state), task, 600)
     return normalizeWolfPlan(parsed, wolves, state)
   } catch {
     return fallbackWolfPlan(wolves, state)
@@ -496,7 +498,7 @@ ${seerNote}
 ${CLAIM_INSTRUCTION}
 返回 JSON：{"speech":"你的遗言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
-    const parsed = await callAiJson(getInstruction(player), perspective, task)
+    const parsed = await callAiJson(getInstruction(player), perspective, task, 600)
     const content =
       typeof parsed.speech === 'string' && parsed.speech.trim()
         ? parsed.speech.trim()

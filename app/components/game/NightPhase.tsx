@@ -149,7 +149,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
     setSelected(null)
   }
 
-  const bgClass = 'bg-indigo-950 min-h-screen'
+  const bgClass = 'bg-indigo-950 min-h-full'
 
   if (!isHumansTurn() || aiThinking) {
     return (

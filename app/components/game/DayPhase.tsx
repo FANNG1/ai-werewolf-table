@@ -60,7 +60,7 @@ export function DayPhase({
   // ── 天亮公告 ──────────────────────────────────────────────────
   if (phase === 'day_announce') {
     return (
-      <div className="bg-amber-950 min-h-screen p-6 flex flex-col items-center justify-center">
+      <div className="bg-amber-950 min-h-full p-6 flex flex-col items-center justify-center">
         <div className="text-5xl mb-4">☀️</div>
         <h2 className="text-xl font-bold text-amber-200 mb-4">天亮了</h2>
         {nightDeaths.length === 0 ? (
@@ -98,7 +98,7 @@ export function DayPhase({
     )
 
     return (
-      <div className="bg-purple-950 min-h-screen p-6 flex flex-col items-center">
+      <div className="bg-purple-950 min-h-full p-6 flex flex-col items-center">
         <div className="text-5xl mb-3">🕯️</div>
         <h2 className="text-xl font-bold text-purple-200 mb-1">
           {dying?.name} 的遗言
@@ -171,7 +171,7 @@ export function DayPhase({
     const isHunterHuman = hunter?.isHuman ?? false
 
     return (
-      <div className="bg-red-950 min-h-screen p-6 flex flex-col items-center">
+      <div className="bg-red-950 min-h-full p-6 flex flex-col items-center">
         <div className="text-5xl mb-4">🏹</div>
         <h2 className="text-xl font-bold text-red-200 mb-2">
           {hunter?.name} 正在行动
@@ -229,7 +229,7 @@ export function DayPhase({
   // ── 白天讨论 ─────────────────────────────────────────────────
   if (phase === 'day_discuss') {
     return (
-      <div className="bg-gray-900 flex flex-col" style={{ height: 'calc(100vh - 56px)' }}>
+      <div className="bg-gray-900 flex flex-col h-full">
         {/* Scrollable speech area */}
         <div className="flex-1 overflow-y-auto p-4 pb-2">
           <h3 className="text-center text-gray-400 text-sm mb-4">
@@ -349,7 +349,7 @@ export function DayPhase({
     const allVotesIn = roundVotes.length === eligibleVoters.length
 
     return (
-      <div className="bg-gray-900 min-h-screen p-4">
+      <div className="bg-gray-900 min-h-full p-4">
         <h3 className="text-center text-amber-300 font-semibold mb-1">
           投票 · 处决最可疑的玩家
         </h3>

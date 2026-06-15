@@ -296,6 +296,26 @@ function matchPlayerByName(name: string, candidates: Player[]): Player | undefin
   return candidates.find((c) => n.includes(c.name) || c.name.includes(n))
 }
 
+function validateSpeechAgainstStrategy(
+  speech: string,
+  strategy: ReturnType<typeof computeRoundStrategy>
+): string | null {
+  if (!strategy || !strategy.mustClaimSeer) return null
+  if (!speech.includes('预言家')) {
+    return '你必须明确说出“我是预言家”或等价表述。'
+  }
+  if (strategy.revealPrivateInfo && !/(验|查验|查杀|金水)/.test(speech)) {
+    return '你必须报出验人信息（查杀/金水/查验结果）。'
+  }
+  if (strategy.pushTargetId) {
+    const targetName = strategy.pushTargetId
+    if (!speech.includes(targetName)) {
+      return `你必须明确提到本轮要推动的目标 ${targetName}。`
+    }
+  }
+  return null
+}
+
 // ───────────────────────── 发言 ─────────────────────────
 // 发言时让 LLM 一并产出「本段发言里公开声明的、关于自己的身份/信息」，
 // 由发言者自己声明，避免事后用关键词猜测造成张冠李戴或虚构查杀。
@@ -359,6 +379,10 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
   const strategyNote = strategy
     ? `\n\n【本轮你的角色任务（最高优先级，务必执行）】\n${strategy.talkingGoal}`
     : ''
+  const pushTargetName =
+    strategy?.pushTargetId
+      ? state.players.find((p) => p.id === strategy.pushTargetId)?.name ?? null
+      : null
 
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
@@ -366,14 +390,31 @@ ${progressNote}
 要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
 如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${wolfPlanNote}
+${pushTargetName ? `\n本轮关键目标玩家名：${pushTargetName}。如果你的任务要求推动目标，发言里必须明确点名。` : ''}
 ${CLAIM_INSTRUCTION}
 返回 JSON：{"speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
-    const parsed = await callAiJson(getInstruction(player), perspective, task, 700)
-    const content =
+    let parsed = await callAiJson(getInstruction(player), perspective, task, 700)
+    let content =
       typeof parsed.speech === 'string' && parsed.speech.trim()
         ? parsed.speech.trim()
         : '我先听听大家怎么说。'
+    const targetAwareStrategy = strategy && pushTargetName
+      ? { ...strategy, pushTargetId: pushTargetName }
+      : strategy
+    const violation = validateSpeechAgainstStrategy(content, targetAwareStrategy)
+    if (violation) {
+      parsed = await callAiJson(
+        getInstruction(player),
+        perspective,
+        `${task}\n\n上一次发言没有完成强制角色任务：${violation}\n请重写，必须完成任务，并仍然只返回指定 JSON。`,
+        700
+      )
+      content =
+        typeof parsed.speech === 'string' && parsed.speech.trim()
+          ? parsed.speech.trim()
+          : content
+    }
     return { content, claims: sanitizeRawClaims(parsed.claims) }
   } catch {
     return { content: '我再听听大家怎么说，先过。', claims: [] }

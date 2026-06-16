@@ -301,11 +301,13 @@ function validateSpeechAgainstStrategy(
   speech: string,
   strategy: ReturnType<typeof computeRoundStrategy>
 ): string | null {
-  if (!strategy || !strategy.mustClaimSeer) return null
-  if (!speech.includes('预言家')) {
-    return '你必须明确说出“我是预言家”或等价表述。'
+  if (!strategy || !strategy.mustClaimRole) return null
+  const roleWord = ROLE_NAMES[strategy.mustClaimRole]
+  if (!speech.includes(roleWord)) {
+    return `你必须明确表明自己是${roleWord}（例如“我是${roleWord}”）。`
   }
-  if (strategy.revealPrivateInfo && !/(验|查验|查杀|金水)/.test(speech)) {
+  // 预言家（含悍跳狼）必须报验人信息
+  if (strategy.mustClaimRole === 'seer' && strategy.revealPrivateInfo && !/(验|查验|查杀|金水)/.test(speech)) {
     return '你必须报出验人信息（查杀/金水/查验结果）。'
   }
   if (strategy.pushTargetId) {

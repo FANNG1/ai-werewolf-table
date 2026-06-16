@@ -10,8 +10,8 @@ export interface PlayerRoundStrategy {
   claimUrgency: 'must' | 'strong' | 'optional' | 'hide'
   revealPrivateInfo: boolean
   pushTargetId?: string | null
-  // 本轮必须公开跳预言家（真预言家必跳，或狼队安排的悍跳）——发言后会校验+重试
-  mustClaimSeer?: boolean
+  // 本轮必须公开亮出的身份（真神职必亮/对跳，或狼队悍跳）——发言后会校验+重试
+  mustClaimRole?: Role
   talkingGoal: string
   reason: string
 }
@@ -68,7 +68,7 @@ function computeSeerStrategy(player: Player, state: GameState): PlayerRoundStrat
       shouldClaim: true,
       claimUrgency: 'must',
       revealPrivateInfo: true,
-      mustClaimSeer: true,
+      mustClaimRole: 'seer',
       pushTargetId: pushKill,
       talkingGoal: `你已经公开了预言家身份，本轮必须保持一致：复述并更新你的验人结果${
         liveKill ? `，继续带头归票查杀【${liveKill.targetName}】` : '，给出今天明确的归票建议'
@@ -86,7 +86,7 @@ function computeSeerStrategy(player: Player, state: GameState): PlayerRoundStrat
       shouldClaim: true,
       claimUrgency: 'must',
       revealPrivateInfo: true,
-      mustClaimSeer: true,
+      mustClaimRole: 'seer',
       pushTargetId: pushKill,
       talkingGoal: `你查到了狼人，本轮必须立刻起跳预言家：公开全部验人结果，重点报查杀【${reportName}】${
         liveKill ? '并带头归票他' : '（他虽已出局，但仍能证明你的预言家身份可信）'
@@ -103,7 +103,7 @@ function computeSeerStrategy(player: Player, state: GameState): PlayerRoundStrat
       shouldClaim: true,
       claimUrgency: 'must',
       revealPrivateInfo: true,
-      mustClaimSeer: true,
+      mustClaimRole: 'seer',
       pushTargetId: fakeId,
       talkingGoal: `场上有人（${nameOf(state, fakeId)}）跳了预言家，而你才是真预言家：必须对跳，报出你的全部验人结果${
         goldNames ? `（金水：${goldNames}）` : ''
@@ -163,7 +163,7 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
     return {
       ...base,
       shouldClaim: isFakeClaimer,
-      mustClaimSeer: isFakeClaimer,
+      mustClaimRole: isFakeClaimer ? 'seer' : undefined,
       claimUrgency: 'must',
       revealPrivateInfo: isFakeClaimer,
       pushTargetId: isFakeClaimer ? plan?.pushTargetId ?? null : null,
@@ -179,7 +179,7 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
     return {
       ...base,
       shouldClaim: true,
-      mustClaimSeer: true,
+      mustClaimRole: 'seer',
       claimUrgency: 'must',
       revealPrivateInfo: true,
       pushTargetId: plan?.pushTargetId ?? null,
@@ -210,9 +210,113 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
   return null
 }
 
-// 入口：按角色分派。当前实现预言家与狼人，其余返回 null。
+// 女巫：拍身份风险高（暴露后易被刀），默认隐藏；仅在硬触发时才跳。
+// 关键洞察：好人被「查杀」必然是狼悍跳（真预言家验女巫只会出好人），故被查杀=可反指对方悍跳。
+function computeWitchStrategy(player: Player, state: GameState): PlayerRoundStrategy {
+  const base = { role: 'witch' as const }
+  const healUsed = !state.witchPotions.heal
+  const poisonUsed = !state.witchPotions.poison
+  const potionsLine = `解药${healUsed ? '已用' : '未用'}、毒药${poisonUsed ? '已用' : '未用'}`
+
+  const selfClaimed = state.publicClaims.some((c) => c.claimantId === player.id && c.claimType === 'witch')
+  const otherWitchClaims = state.publicClaims.filter((c) => c.claimType === 'witch' && c.claimantId !== player.id)
+  // 我毒杀的人是否已翻牌证实为狼（公开硬证据）
+  const myPoison = state.nightActions.find((a) => a.actorId === player.id && a.actionType === 'poison')
+  const poisonedWolf = myPoison?.targetId
+    ? state.players.find((p) => p.id === myPoison.targetId && isWerewolf(p.role) && p.isRoleRevealed) ?? null
+    : null
+  const killedBySeer = state.publicClaims.some(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === player.id
+  )
+
+  // 1) 已跳 → 守住身份、保持用药信息一致
+  if (selfClaimed) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: true, mustClaimRole: 'witch', pushTargetId: null,
+      talkingGoal: `你已公开女巫身份，本轮保持一致：清楚说明你的用药情况（${potionsLine}）和由此得到的信息，给出归票建议，不要改口。`,
+      reason: '已公开跳女巫，保持一致',
+    }
+  }
+  // 2) 有假女巫 → 必须对跳
+  if (otherWitchClaims.length > 0) {
+    const fakeId = otherWitchClaims[otherWitchClaims.length - 1].claimantId
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: true, mustClaimRole: 'witch', pushTargetId: fakeId,
+      talkingGoal: `场上有人（${nameOf(state, fakeId)}）跳了女巫，而你才是真女巫：必须对跳，亮出真实用药情况（${potionsLine}）与细节，质疑对方说不清的用药/被救者细节，把对方当狼推。`,
+      reason: '遭遇假女巫，必须对跳',
+    }
+  }
+  // 3) 毒杀了已证实的狼 → 强烈倾向跳，用硬证据立信
+  if (poisonedWolf) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'strong', revealPrivateInfo: true, pushTargetId: null,
+      talkingGoal: `你毒杀的【${poisonedWolf.name}】已翻牌证实是狼，这是你女巫身份的硬证据：建议起跳女巫、公布用药（${potionsLine}），用这条信息建立可信好人阵营、带队找出剩余的狼。`,
+      reason: '毒杀已证实的狼，跳出建立可信',
+    }
+  }
+  // 4) 被「查杀」（必为悍跳狼）→ 跳女巫自证并反指
+  if (killedBySeer) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'strong', revealPrivateInfo: true, pushTargetId: null,
+      talkingGoal: `你被"预言家"查杀，但你其实是女巫——真预言家验女巫只会出好人，所以这个"预言家"几乎必是悍跳的狼：跳出来自证（说明用药情况：${potionsLine}），并反指查杀你的人是狼。`,
+      reason: '被查杀必为悍跳狼，跳女巫自证反指',
+    }
+  }
+  // 5) 默认隐藏
+  return {
+    ...base, shouldClaim: false, claimUrgency: 'hide', revealPrivateInfo: false, pushTargetId: null,
+    talkingGoal: `本轮先隐藏女巫身份：只做逻辑分析、表达怀疑，不要暴露你是女巫或用药情况，留到关键时刻再跳。`,
+    reason: '局势不急，隐藏女巫',
+  }
+}
+
+// 猎人：早跳暴露强神不划算；默认像好人、留枪口压力，仅硬触发时拍身份。
+function computeHunterStrategy(player: Player, state: GameState): PlayerRoundStrategy {
+  const base = { role: 'hunter' as const }
+  const selfClaimed = state.publicClaims.some((c) => c.claimantId === player.id && c.claimType === 'hunter')
+  const otherHunterClaims = state.publicClaims.filter((c) => c.claimType === 'hunter' && c.claimantId !== player.id)
+  const killedBySeer = state.publicClaims.some(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === player.id
+  )
+
+  // 1) 已跳 → 守住身份、维持枪口压力
+  if (selfClaimed) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: false, mustClaimRole: 'hunter', pushTargetId: null,
+      talkingGoal: `你已公开猎人身份，本轮保持一致：表明立场，用枪口压力威慑你怀疑的狼（放逐你或夜里刀你都会触发开枪），给出明确的归票建议。`,
+      reason: '已公开跳猎人，保持一致',
+    }
+  }
+  // 2) 有假猎人 → 必须对跳
+  if (otherHunterClaims.length > 0) {
+    const fakeId = otherHunterClaims[otherHunterClaims.length - 1].claimantId
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: false, mustClaimRole: 'hunter', pushTargetId: fakeId,
+      talkingGoal: `场上有人（${nameOf(state, fakeId)}）跳了猎人，而你才是真猎人：必须对跳，表明真实身份并施加枪口压力，指出对方是冒充的狼。`,
+      reason: '遭遇假猎人，必须对跳',
+    }
+  }
+  // 3) 被「查杀」（必为悍跳狼）→ 拍猎人挡推
+  if (killedBySeer) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'strong', revealPrivateInfo: false, pushTargetId: null,
+      talkingGoal: `你被"预言家"查杀、面临被放逐，但你是猎人：可以拍出猎人身份挡推（放逐我=触发我开枪带人，对好人不划算），并反指这个"预言家"很可能是悍跳的狼。`,
+      reason: '被查杀必为悍跳狼，拍猎人挡推',
+    }
+  }
+  // 4) 默认：像好人，留枪口压力但不乱跳
+  return {
+    ...base, shouldClaim: false, claimUrgency: 'hide', revealPrivateInfo: false, pushTargetId: null,
+    talkingGoal: `本轮像普通好人一样分析发言、票型与站边找狼；不要主动跳猎人身份，但可以在发言里留下"枪口压力"威慑你高度怀疑的人。`,
+    reason: '常规局势，隐藏猎人、保留枪口压力',
+  }
+}
+
+// 入口：按角色分派。已实现预言家/狼人/女巫/猎人，其余返回 null。
 export function computeRoundStrategy(player: Player, state: GameState): PlayerRoundStrategy | null {
   if (player.role === 'seer') return computeSeerStrategy(player, state)
+  if (player.role === 'witch') return computeWitchStrategy(player, state)
+  if (player.role === 'hunter') return computeHunterStrategy(player, state)
   if (isWerewolf(player.role)) return computeWerewolfStrategy(player, state)
   return null
 }

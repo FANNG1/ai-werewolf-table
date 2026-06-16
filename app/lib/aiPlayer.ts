@@ -214,6 +214,7 @@ function getRoleStrategy(role: Role): string {
 function getCommonReasoningInstruction(): string {
   return `推理重点：
 - 结合死亡信息、发言顺序、投票票型、对跳身份、站边关系和轮次收益。
+- 已出局狼人的发言不能按好人逻辑直接采信：他可能故意踩同伴做身份，也可能故意保好人制造反向关系；要结合票型、验人和收益判断。
 - 区分“我知道的信息”和“我推测的信息”，不要把推测说成确定事实。
 - 发言要像真实玩家：有立场、有理由，可以怀疑但不要机械罗列。
 - 当前采用屠边规则：好人胜利=所有狼人出局；狼人胜利=所有神职出局或所有平民出局。`
@@ -348,6 +349,65 @@ function sanitizeRawClaims(raw: unknown): RawClaim[] {
     })
   }
   return out
+}
+
+function voteGuardrail(player: Player, state: GameState, candidates: Player[]): { instruction: string; fallbackId?: string } {
+  const candidateIds = new Set(candidates.map((c) => c.id))
+  const nameOf = (id?: string | null) => state.players.find((p) => p.id === id)?.name ?? '未知'
+  const wolfIds = new Set(state.players.filter((p) => isWerewolf(p.role)).map((p) => p.id))
+
+  const seerKillClaims = state.publicClaims.filter(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && !!c.targetId && candidateIds.has(c.claimantId)
+  )
+  const claimsAgainstMe = seerKillClaims.filter((c) => c.targetId === player.id)
+  const nonWolfClaimAgainstMe = claimsAgainstMe.find((c) => !wolfIds.has(c.claimantId))
+  const wolfClaimAgainstMe = claimsAgainstMe.find((c) => wolfIds.has(c.claimantId))
+
+  if (isWerewolf(player.role)) {
+    if (nonWolfClaimAgainstMe) {
+      return {
+        instruction: `硬局势：${nameOf(nonWolfClaimAgainstMe.claimantId)}以预言家身份查杀了你。作为狼人，你投他属于正常自保/冲票；除非已有更好抗推位，否则不要投狼同伴。`,
+        fallbackId: nonWolfClaimAgainstMe.claimantId,
+      }
+    }
+
+    if (wolfClaimAgainstMe) {
+      const busMe = state.wolfPlan?.busWolfId === player.id && state.wolfPlanRound === state.round
+      return {
+        instruction: busMe
+          ? `硬局势：狼同伴${nameOf(wolfClaimAgainstMe.claimantId)}悍跳查杀你，这是狼队计划里的倒钩/弃车。你可以表面质疑他，但投票要服务整体计划：优先跟随狼队主推目标，不要无收益地反投同伴。`
+          : `硬局势：狼同伴${nameOf(wolfClaimAgainstMe.claimantId)}查杀了你，但当前狼队计划没有安排弃车。不要机械反投同伴；优先把票导向可信好人或狼队主推目标。`,
+        fallbackId:
+          state.wolfPlan && state.wolfPlanRound === state.round && state.wolfPlan.pushTargetId && candidateIds.has(state.wolfPlan.pushTargetId)
+            ? state.wolfPlan.pushTargetId
+            : undefined,
+      }
+    }
+
+    const teammateKilled = seerKillClaims.find((c) => c.targetId && wolfIds.has(c.targetId) && c.targetId !== player.id)
+    if (teammateKilled) {
+      const busMate = state.wolfPlan?.busWolfId === teammateKilled.targetId && state.wolfPlanRound === state.round
+      return {
+        instruction: busMate
+          ? `硬局势：狼同伴${nameOf(teammateKilled.targetId)}被${nameOf(teammateKilled.claimantId)}查杀，且狼队计划允许弃车。可以跟票同伴做身份，但理由要像好人视角。`
+          : `硬局势：狼同伴${nameOf(teammateKilled.targetId)}被${nameOf(teammateKilled.claimantId)}查杀。不要硬保同伴，也不要无脑卖；通常应质疑这个预言家的可信度或转推狼队主推目标。`,
+        fallbackId:
+          !busMate && candidateIds.has(teammateKilled.claimantId)
+            ? teammateKilled.claimantId
+            : undefined,
+      }
+    }
+  } else {
+    const liveSeerKill = seerKillClaims.find((c) => c.targetId && candidateIds.has(c.targetId))
+    if (liveSeerKill) {
+      return {
+        instruction: `硬局势：${nameOf(liveSeerKill.claimantId)}以预言家身份查杀了${nameOf(liveSeerKill.targetId)}。如果你没有更强证据认为他是假预言家，应优先跟随这条查杀归票。`,
+        fallbackId: liveSeerKill.targetId ?? undefined,
+      }
+    }
+  }
+
+  return { instruction: '没有必须覆盖投票的硬局势，按发言、票型和身份收益综合判断。' }
 }
 
 const CLAIM_INSTRUCTION = `同时，请如实标注你在这段话里【公开声明的、关于你自己的身份或信息】：
@@ -565,6 +625,7 @@ export async function generateAiVote(
 ): Promise<string | null> {
   if (candidates.length === 0) return null
   const perspective = buildPlayerPerspective(player, state)
+  const guardrail = voteGuardrail(player, state, candidates)
 
   // 当前轮已经投出的票（顺序公投：后投者能看到前面的票型，形成跟票/归票/抗推）
   const priorVotes = state.votes.filter((v) => v.round === state.round)
@@ -586,6 +647,8 @@ export async function generateAiVote(
 
   const task = `现在是投票放逐阶段，本轮采用依次公开投票。候选人：${candidates.map((c) => c.name).join('、')}。
 ${tallyLine}
+【本轮投票硬局势】
+${guardrail.instruction}
 请基于你掌握的信息决定投票放逐谁，并参考当前票型：
 - 好人要优先投最高狼面玩家，结合发言矛盾、对跳可信度、死亡信息；当票型已形成对某个高狼面玩家的合力时可以跟票归票，集中放逐。
 - 狼人要优先推动放逐关键好人或错误焦点，可借票型把水搅浑、分票自保或假意跟好人票；可以倒钩狼同伴，但不能无脑保护或无脑卖队友。
@@ -596,9 +659,9 @@ ${tallyLine}
     const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
     if (matched) return matched.id
   } catch {
-    // fall through to random
+    // fall through to deterministic fallback
   }
-  return pickRandom(candidates).id
+  return guardrail.fallbackId ?? pickRandom(candidates).id
 }
 
 // ───────────────────────── 夜晚行动（守卫/狼人/预言家）─────────────────────────

@@ -41,6 +41,13 @@ function getInitialVoterIndex(state: GameState): number {
   return voters.length > 0 ? (state.round - 1) % voters.length : 0
 }
 
+function advanceNightOrResolve(state: GameState, current: Phase): GameState {
+  const nextPhase = nextNightPhase(state, current)
+  return nextPhase === 'day_announce'
+    ? processNightEnd(state)
+    : { ...state, phase: nextPhase }
+}
+
 // 把 AI 发言时自己声明的结构化 claim 转成 PublicClaim（targetName → 玩家 id）。
 // 由发言者自报，不再事后猜测，避免张冠李戴和虚构查杀。
 function rawClaimsToPublic(
@@ -395,8 +402,7 @@ export function useGame() {
                     }
                   }
                 }
-                const nextPhase = nextNightPhase(s, 'night_guard')
-                s = { ...s, phase: nextPhase }
+                s = advanceNightOrResolve(s, 'night_guard')
               } else if (phase === 'night_werewolf') {
                 const wolves = getAliveWerewolves(s).filter((p) => !p.isHuman)
                 const alreadyKilling = s.nightActions.some(
@@ -419,8 +425,7 @@ export function useGame() {
                   // 狼刀已定，趁天亮前商定次日计划
                   s = await maybeGenerateWolfPlan(s)
                 }
-                const nextPhase = nextNightPhase(s, 'night_werewolf')
-                s = { ...s, phase: nextPhase }
+                s = advanceNightOrResolve(s, 'night_werewolf')
               } else if (phase === 'night_seer') {
                 const seer = s.players.find((p) => p.isAlive && p.role === 'seer' && !p.isHuman)
                 if (seer) {
@@ -439,8 +444,7 @@ export function useGame() {
                     }
                   }
                 }
-                const nextPhase = nextNightPhase(s, 'night_seer')
-                s = { ...s, phase: nextPhase }
+                s = advanceNightOrResolve(s, 'night_seer')
               } else if (phase === 'night_witch') {
                 const witch = s.players.find((p) => p.isAlive && p.role === 'witch' && !p.isHuman)
                 if (witch) {
@@ -651,8 +655,7 @@ export function useGame() {
           return processNightEnd(newState)
         }
 
-        const nextPhase = nextNightPhase(newState, prev.phase)
-        return { ...newState, phase: nextPhase }
+        return advanceNightOrResolve(newState, prev.phase)
       })
     },
     []
@@ -664,8 +667,7 @@ export function useGame() {
       if (prev.phase === 'night_witch') {
         return processNightEnd(prev)
       }
-      const nextPhase = nextNightPhase(prev, prev.phase)
-      return { ...prev, phase: nextPhase }
+      return advanceNightOrResolve(prev, prev.phase)
     })
   }, [])
 

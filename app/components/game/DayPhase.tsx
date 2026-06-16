@@ -191,7 +191,6 @@ export function DayPhase({
                     selectable
                     selected={humanShootTarget === p.id}
                     onClick={() => setHumanShootTarget(humanShootTarget === p.id ? null : p.id)}
-                    showRole
                   />
                 ))}
             </div>

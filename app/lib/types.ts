@@ -42,6 +42,8 @@ export interface NightAction {
   actorId: string
   targetId: string | null
   actionType: 'kill' | 'check' | 'heal' | 'poison' | 'protect' | 'shoot'
+  reason?: string
+  llmTrace?: AiRequestTrace
 }
 
 export interface Speech {
@@ -52,12 +54,24 @@ export interface Speech {
   round: number
   reasoning?: string
   isLastWords?: boolean
+  llmTrace?: AiRequestTrace
 }
 
 export interface Vote {
   voterId: string
   targetId: string
   round: number
+  reason?: string
+  llmTrace?: AiRequestTrace
+}
+
+export interface AiRequestTrace {
+  instruction: string
+  perspective: string
+  task: string
+  json: boolean
+  maxTokens?: number
+  rawResponse: string
 }
 
 export interface WolfPlan {
@@ -96,6 +110,7 @@ export interface GameConfig {
     name: string
     isHuman: boolean
     aiLevel?: AiLevel
+    preferredRole?: Role | null
   }>
   roles: Role[]
 }
@@ -116,7 +131,7 @@ export interface GameState {
   pendingHunter: string | null
   pendingShotSource: 'night' | 'vote' | null
   pendingLastWords: string | null
-  pendingLastWordsSource: 'night' | 'vote' | null
+  pendingLastWordsSource: 'night' | 'vote' | 'shot' | null
   wolfPlan: WolfPlan | null
   wolfPlanRound: number
   publicClaims: PublicClaim[]

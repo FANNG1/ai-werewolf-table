@@ -28,12 +28,12 @@ export function PlayerCard({ player, selectable, selected, onClick, showRole, vo
       `}
     >
       <div className={`text-2xl ${player.isAlive ? '' : 'grayscale'}`}>
-        {showRole || !player.isAlive ? ROLE_EMOJIS[player.role] : '🎭'}
+        {showRole || player.isRoleRevealed ? ROLE_EMOJIS[player.role] : '🎭'}
       </div>
       <div className="text-xs font-medium text-center text-gray-200 truncate w-full text-center">
         {player.name}
       </div>
-      {(showRole || !player.isAlive) && (
+      {(showRole || player.isRoleRevealed) && (
         <div className="text-xs text-yellow-400">{ROLE_NAMES[player.role]}</div>
       )}
       {!player.isAlive && (

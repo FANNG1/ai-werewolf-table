@@ -48,6 +48,23 @@ function advanceNightOrResolve(state: GameState, current: Phase): GameState {
     : { ...state, phase: nextPhase }
 }
 
+function logNightAction(action: NightAction, phase: Phase) {
+  return {
+    id: genId(),
+    type: 'action' as const,
+    round: action.round,
+    phase,
+    data: {
+      actorId: action.actorId,
+      targetId: action.targetId,
+      actionType: action.actionType,
+      reason: action.reason,
+      llmTrace: action.llmTrace,
+    },
+    timestamp: Date.now(),
+  }
+}
+
 // 把 AI 发言时自己声明的结构化 claim 转成 PublicClaim（targetName → 玩家 id）。
 // 由发言者自报，不再事后猜测，避免张冠李戴和虚构查杀。
 function rawClaimsToPublic(
@@ -182,8 +199,8 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
   if (guard) {
     const cands = s.players.filter((p) => p.isAlive && p.id !== s.guardLastProtect)
     tasks.push(
-      decideNightAction(guard, s, 'protect', cands).then((t) =>
-        t ? ({ round: s.round, actorId: guard.id, targetId: t, actionType: 'protect' } as NightAction) : null
+      decideNightAction(guard, s, 'protect', cands).then((d) =>
+        d.targetId ? ({ round: s.round, actorId: guard.id, targetId: d.targetId, actionType: 'protect', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
       )
     )
   }
@@ -192,8 +209,8 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
     const killer = wolves[0]
     const cands = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
     tasks.push(
-      decideWerewolfKill(wolves, s, cands).then((t) =>
-        t ? ({ round: s.round, actorId: killer.id, targetId: t, actionType: 'kill' } as NightAction) : null
+      decideWerewolfKill(wolves, s, cands).then((d) =>
+        d.targetId ? ({ round: s.round, actorId: killer.id, targetId: d.targetId, actionType: 'kill', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
       )
     )
   }
@@ -204,8 +221,8 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
       (p) => p.isAlive && p.id !== seer.id && !checkedIds.includes(p.id)
     )
     tasks.push(
-      decideNightAction(seer, s, 'check', cands).then((t) =>
-        t ? ({ round: s.round, actorId: seer.id, targetId: t, actionType: 'check' } as NightAction) : null
+      decideNightAction(seer, s, 'check', cands).then((d) =>
+        d.targetId ? ({ round: s.round, actorId: seer.id, targetId: d.targetId, actionType: 'check', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
       )
     )
   }
@@ -215,6 +232,7 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
   s = {
     ...s,
     nightActions: [...s.nightActions, ...batch],
+    logs: [...s.logs, ...batch.map((a) => logNightAction(a, 'night_werewolf'))],
     guardLastProtect: protectAction ? protectAction.targetId : s.guardLastProtect,
   }
 
@@ -233,14 +251,16 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
       s = {
         ...s,
         witchPotions: { ...s.witchPotions, heal: false },
-        nightActions: [...s.nightActions, { round: s.round, actorId: witch.id, targetId: killedId, actionType: 'heal' }],
+        nightActions: [...s.nightActions, { round: s.round, actorId: witch.id, targetId: killedId, actionType: 'heal', reason: decision.reason, llmTrace: decision.llmTrace }],
       }
+      s = { ...s, logs: [...s.logs, logNightAction(s.nightActions[s.nightActions.length - 1], 'night_witch')] }
     } else if (decision.poisonTargetId) {
       s = {
         ...s,
         witchPotions: { ...s.witchPotions, poison: false },
-        nightActions: [...s.nightActions, { round: s.round, actorId: witch.id, targetId: decision.poisonTargetId, actionType: 'poison' }],
+        nightActions: [...s.nightActions, { round: s.round, actorId: witch.id, targetId: decision.poisonTargetId, actionType: 'poison', reason: decision.reason, llmTrace: decision.llmTrace }],
       }
+      s = { ...s, logs: [...s.logs, logNightAction(s.nightActions[s.nightActions.length - 1], 'night_witch')] }
     }
   }
 
@@ -390,15 +410,17 @@ export function useGame() {
                   const candidates = s.players.filter(
                     (p) => p.isAlive && p.id !== s.guardLastProtect
                   )
-                  const targetId = await decideNightAction(guard, s, 'protect', candidates)
-                  if (targetId) {
+                  const decision = await decideNightAction(guard, s, 'protect', candidates)
+                  if (decision.targetId) {
+                    const action: NightAction = { round: s.round, actorId: guard.id, targetId: decision.targetId, actionType: 'protect', reason: decision.reason, llmTrace: decision.llmTrace }
                     s = {
                       ...s,
-                      guardLastProtect: targetId,
+                      guardLastProtect: decision.targetId,
                       nightActions: [
                         ...s.nightActions,
-                        { round: s.round, actorId: guard.id, targetId, actionType: 'protect' },
+                        action,
                       ],
+                      logs: [...s.logs, logNightAction(action, 'night_guard')],
                     }
                   }
                 }
@@ -412,14 +434,16 @@ export function useGame() {
                   // 由存活的第一个 AI 狼代表狼队决策，目标为存活的好人
                   const killer = wolves[0]
                   const candidates = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
-                  const targetId = await decideWerewolfKill(wolves, s, candidates)
-                  if (targetId) {
+                  const decision = await decideWerewolfKill(wolves, s, candidates)
+                  if (decision.targetId) {
+                    const action: NightAction = { round: s.round, actorId: killer.id, targetId: decision.targetId, actionType: 'kill', reason: decision.reason, llmTrace: decision.llmTrace }
                     s = {
                       ...s,
                       nightActions: [
                         ...s.nightActions,
-                        { round: s.round, actorId: killer.id, targetId, actionType: 'kill' },
+                        action,
                       ],
+                      logs: [...s.logs, logNightAction(action, 'night_werewolf')],
                     }
                   }
                   // 狼刀已定，趁天亮前商定次日计划
@@ -433,14 +457,16 @@ export function useGame() {
                   const candidates = s.players.filter(
                     (p) => p.isAlive && p.id !== seer.id && !checkedIds.includes(p.id)
                   )
-                  const targetId = await decideNightAction(seer, s, 'check', candidates)
-                  if (targetId) {
+                  const decision = await decideNightAction(seer, s, 'check', candidates)
+                  if (decision.targetId) {
+                    const action: NightAction = { round: s.round, actorId: seer.id, targetId: decision.targetId, actionType: 'check', reason: decision.reason, llmTrace: decision.llmTrace }
                     s = {
                       ...s,
                       nightActions: [
                         ...s.nightActions,
-                        { round: s.round, actorId: seer.id, targetId, actionType: 'check' },
+                        action,
                       ],
+                      logs: [...s.logs, logNightAction(action, 'night_seer')],
                     }
                   }
                 }
@@ -455,22 +481,26 @@ export function useGame() {
                   const poisonCandidates = s.players.filter((p) => p.isAlive && p.id !== witch.id)
                   const decision = await decideWitchAction(witch, s, killedId, poisonCandidates)
                   if (decision.heal && killedId) {
+                    const action: NightAction = { round: s.round, actorId: witch.id, targetId: killedId, actionType: 'heal', reason: decision.reason, llmTrace: decision.llmTrace }
                     s = {
                       ...s,
                       witchPotions: { ...s.witchPotions, heal: false },
                       nightActions: [
                         ...s.nightActions,
-                        { round: s.round, actorId: witch.id, targetId: killedId, actionType: 'heal' },
+                        action,
                       ],
+                      logs: [...s.logs, logNightAction(action, 'night_witch')],
                     }
                   } else if (decision.poisonTargetId) {
+                    const action: NightAction = { round: s.round, actorId: witch.id, targetId: decision.poisonTargetId, actionType: 'poison', reason: decision.reason, llmTrace: decision.llmTrace }
                     s = {
                       ...s,
                       witchPotions: { ...s.witchPotions, poison: false },
                       nightActions: [
                         ...s.nightActions,
-                        { round: s.round, actorId: witch.id, targetId: decision.poisonTargetId, actionType: 'poison' },
+                        action,
                       ],
+                      logs: [...s.logs, logNightAction(action, 'night_witch')],
                     }
                   }
                 }
@@ -520,20 +550,21 @@ export function useGame() {
             return
           }
 
-          const { content, claims } = await generateAiSpeech(player, localState)
+          const { content, claims, llmTrace } = await generateAiSpeech(player, localState)
           const speech = {
             id: genId(),
             playerId: player.id,
             content,
             timestamp: Date.now(),
             round: localState.round,
+            llmTrace,
           }
           const log = {
             id: genId(),
             type: 'speech' as const,
             round: localState.round,
             phase: localState.phase,
-            data: { playerId: player.id, content },
+            data: { playerId: player.id, content, llmTrace },
             timestamp: Date.now(),
           }
           const publicClaims = rawClaimsToPublic(claims, speech, localState)
@@ -607,11 +638,12 @@ export function useGame() {
           continue
         }
 
-        let targetId = await generateAiVote(voter, localState, candidates)
+        const decision = await generateAiVote(voter, localState, candidates)
+        let targetId = decision.targetId
         if (!targetId) {
           targetId = candidates[Math.floor(Math.random() * candidates.length)].id
         }
-        const vote = { voterId: voter.id, targetId, round }
+        const vote = { voterId: voter.id, targetId, round, reason: decision.reason, llmTrace: decision.llmTrace }
         const nextIndex = (index + 1) % voters.length
         votedIds.add(voter.id)
         localState = { ...localState, votes: [...localState.votes, vote], currentVoterIndex: nextIndex }
@@ -674,16 +706,21 @@ export function useGame() {
   const finishDiscussion = useCallback(() => {
     setState((prev) => {
       if (!prev) return prev
-      // day_announce → day_discuss, day_discuss → day_vote
-      const nextPhase = prev.phase === 'day_announce' ? 'day_discuss' : 'day_vote'
-      return {
-        ...prev,
-        phase: nextPhase,
-        currentSpeakerIndex:
-          nextPhase === 'day_discuss' ? getInitialSpeakerIndex(prev) : prev.currentSpeakerIndex,
-        currentVoterIndex:
-          nextPhase === 'day_vote' ? getInitialVoterIndex(prev) : prev.currentVoterIndex,
+      if (prev.phase === 'day_announce') {
+        // 先报死讯（本屏）。点「开始讨论」后：若有夜死者待发表遗言，先逐个遗言，再进讨论
+        if (prev.pendingLastWordsSource === 'night') {
+          const spokenLW = new Set(
+            prev.speeches.filter((s) => s.isLastWords && s.round === prev.round).map((s) => s.playerId)
+          )
+          const next = prev.nightDeaths.find((id) => !spokenLW.has(id))
+          if (next) {
+            return { ...prev, phase: 'day_last_words', pendingLastWords: next }
+          }
+        }
+        return { ...prev, phase: 'day_discuss', currentSpeakerIndex: getInitialSpeakerIndex(prev) }
       }
+      // day_discuss → day_vote
+      return { ...prev, phase: 'day_vote', currentVoterIndex: getInitialVoterIndex(prev) }
     })
   }, [])
 
@@ -736,7 +773,7 @@ export function useGame() {
     processingRef.current = true
     setAiThinking(true)
     try {
-      const { content, claims } = await generateLastWords(dying, currentState)
+      const { content, claims, llmTrace } = await generateLastWords(dying, currentState)
       setState((prev) => {
         if (!prev || prev.phase !== 'day_last_words' || prev.pendingLastWords !== dying.id) return prev
         if (prev.speeches.some((s) => s.playerId === dying.id && s.isLastWords && s.round === prev.round)) {
@@ -749,6 +786,7 @@ export function useGame() {
           timestamp: Date.now(),
           round: prev.round,
           isLastWords: true,
+          llmTrace,
         }
         const publicClaims = rawClaimsToPublic(claims, speech, prev)
         const log = {
@@ -756,7 +794,7 @@ export function useGame() {
           type: 'speech' as const,
           round: prev.round,
           phase: prev.phase,
-          data: { playerId: dying.id, content, lastWords: true },
+          data: { playerId: dying.id, content, lastWords: true, llmTrace },
           timestamp: Date.now(),
         }
         return {

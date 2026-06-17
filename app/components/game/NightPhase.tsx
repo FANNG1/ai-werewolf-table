@@ -59,10 +59,10 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
     setWolfAdviceLoading(true)
     const candidates = players.filter((p) => p.isAlive && !isWerewolf(p.role))
     decideWerewolfKill(aiWolves, state, candidates)
-      .then((targetId) => {
-        if (cancelled || !targetId) return
-        const target = players.find((p) => p.id === targetId)
-        if (target) setWolfAdvice({ targetId, targetName: target.name })
+      .then((decision) => {
+        if (cancelled || !decision.targetId) return
+        const target = players.find((p) => p.id === decision.targetId)
+        if (target) setWolfAdvice({ targetId: decision.targetId, targetName: target.name })
       })
       .finally(() => {
         if (!cancelled) setWolfAdviceLoading(false)

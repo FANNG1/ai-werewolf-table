@@ -11,6 +11,7 @@ interface PlayerConfig {
   name: string
   isHuman: boolean
   aiLevel?: AiLevel
+  preferredRole?: Role | null
 }
 
 export default function Home() {
@@ -22,8 +23,15 @@ export default function Home() {
     setStep('roles')
   }
 
-  const handleRolesConfirm = (roles: Role[]) => {
-    const config: GameConfig = { players, roles }
+  const handleRolesConfirm = (roles: Role[], preferredRoles: Array<Role | null>) => {
+    let humanIndex = 0
+    const configuredPlayers = players.map((player) => {
+      if (!player.isHuman) return { ...player, preferredRole: null }
+      const preferredRole = preferredRoles[humanIndex] ?? null
+      humanIndex += 1
+      return { ...player, preferredRole }
+    })
+    const config: GameConfig = { players: configuredPlayers, roles }
     const encoded = encodeURIComponent(JSON.stringify(config))
     window.location.href = `/game?config=${encoded}`
   }
@@ -79,6 +87,7 @@ export default function Home() {
         </div>
         <RoleSetup
           playerCount={players.length}
+          players={players}
           onConfirm={handleRolesConfirm}
           onBack={() => setStep('players')}
         />

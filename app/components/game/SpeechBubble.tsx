@@ -14,8 +14,13 @@ export function SpeechBubble({ speech, player, isNew }: Props) {
   const [displayed, setDisplayed] = useState(isNew ? '' : speech.content)
 
   useEffect(() => {
-    if (!isNew) return
+    // 非「最新」气泡（包括动画被下一条发言打断而 isNew 翻为 false 时）：直接显示完整内容
+    if (!isNew) {
+      setDisplayed(speech.content)
+      return
+    }
     let i = 0
+    setDisplayed('')
     const timer = setInterval(() => {
       i++
       setDisplayed(speech.content.slice(0, i))

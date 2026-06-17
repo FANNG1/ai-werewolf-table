@@ -5,12 +5,28 @@ function genId(): string {
   return Math.random().toString(36).slice(2, 9)
 }
 
+function assignRoles(config: GameConfig): Role[] {
+  const assigned: Array<Role | null> = config.players.map(() => null)
+  const remaining = [...config.roles]
+
+  config.players.forEach((p, i) => {
+    if (!p.preferredRole) return
+    const idx = remaining.indexOf(p.preferredRole)
+    if (idx < 0) return
+    assigned[i] = p.preferredRole
+    remaining.splice(idx, 1)
+  })
+
+  const shuffledRemaining = shuffleRoles(remaining)
+  return assigned.map((role) => role ?? (shuffledRemaining.shift() as Role))
+}
+
 export function initGame(config: GameConfig): GameState {
-  const shuffled = shuffleRoles(config.roles)
+  const assignedRoles = assignRoles(config)
   const players: Player[] = config.players.map((p, i) => ({
     id: `p${i}`,
     name: p.name,
-    role: shuffled[i] as Role,
+    role: assignedRoles[i],
     isHuman: p.isHuman,
     isAlive: true,
     aiLevel: p.aiLevel,
@@ -136,7 +152,8 @@ export function processNightEnd(state: GameState): GameState {
 
   const newPlayers = state.players.map((p) => {
     if (died.has(p.id)) {
-      return { ...p, isAlive: false, isRoleRevealed: true }
+      // 保密规则：死亡不翻牌（身份保密）
+      return { ...p, isAlive: false }
     }
     return p
   })
@@ -166,25 +183,35 @@ export function processNightEnd(state: GameState): GameState {
     pendingLastWordsSource: null,
   }
 
-  // 猎人夜晚被狼人击杀时触发开枪；被毒死不触发，狼王夜晚死亡不触发。
-  const nightHunter = Array.from(killedByWerewolves).find((id) => {
-    const p = newPlayers.find((pl) => pl.id === id)
-    return p?.role === 'hunter'
-  })
-  if (nightHunter) {
-    return {
-      ...newState,
-      phase: 'hunter_shoot',
-      pendingHunter: nightHunter,
-      pendingShotSource: 'night',
-    }
-  }
-
   const win = checkWinCondition(newState)
   if (win) return { ...newState, winner: win, phase: 'game_over' }
 
-  // 夜晚死亡不留遗言，直接进入天亮公告
+  // 猎人夜晚被狼人击杀时，遗言结束后再开枪（被毒死不触发，狼王夜晚死亡不触发）
+  const nightHunter =
+    Array.from(killedByWerewolves).find((id) => {
+      const p = newPlayers.find((pl) => pl.id === id)
+      return p?.role === 'hunter'
+    }) ?? null
+
+  // 先进入天亮公告（报死讯）。玩家点「开始讨论」后再逐个发表夜死遗言（见 finishDiscussion / processLastWordsEnd）。
+  if (nightDeaths.length > 0) {
+    return {
+      ...newState,
+      phase: 'day_announce',
+      pendingLastWordsSource: 'night', // 标记：公告后有夜死遗言待发表
+      pendingHunter: nightHunter,
+      pendingShotSource: nightHunter ? 'night' : null,
+    }
+  }
+
+  // 平安夜，直接进入天亮公告
   return newState
+}
+
+// day_discuss 的起始发言者（与 useGame.getInitialSpeakerIndex 一致）
+function initialSpeakerIndex(state: GameState): number {
+  const aliveCount = state.players.filter((p) => p.isAlive).length
+  return aliveCount > 0 ? (state.round - 1) % aliveCount : 0
 }
 
 export function processVote(state: GameState): GameState {
@@ -270,7 +297,8 @@ export function processVote(state: GameState): GameState {
   }
 
   const newPlayers = state.players.map((p) =>
-    p.id === votedOut ? { ...p, isAlive: false, isRoleRevealed: true } : p
+    // 保密规则：被放逐者不翻牌（白痴例外，在上方分支已翻；猎人/狼王开枪时再翻）
+    p.id === votedOut ? { ...p, isAlive: false } : p
   )
   const newLogs = [
     ...state.logs,
@@ -306,14 +334,47 @@ export function processVote(state: GameState): GameState {
   return { ...newState, phase: 'day_last_words' }
 }
 
-// 遗言结束后的流转（仅放逐遗言会走到这里）：先开枪（如猎人/狼王），否则判定胜负或进入下一夜。
+// 遗言结束后的流转。夜死遗言：多名夜死者逐个发表，全部结束后若有猎人则开枪、再进入天亮公告；
+// 放逐遗言：先开枪（如猎人/狼王），否则判定胜负或进入下一夜。
 export function processLastWordsEnd(state: GameState): GameState {
-  const base: GameState = { ...state, pendingLastWords: null, pendingLastWordsSource: null }
+  const source = state.pendingLastWordsSource
 
+  if (source === 'night') {
+    // 还有未发表遗言的夜死者 → 继续下一位
+    const spokenLW = new Set(
+      state.speeches.filter((s) => s.isLastWords && s.round === state.round).map((s) => s.playerId)
+    )
+    const next = state.nightDeaths.find((id) => !spokenLW.has(id))
+    if (next) {
+      return { ...state, phase: 'day_last_words', pendingLastWords: next, pendingLastWordsSource: 'night' }
+    }
+    // 夜死者都说完了：清空遗言态，若有夜死猎人则开枪，否则判负/进入白天讨论（死讯已在公告阶段报过）
+    const base: GameState = { ...state, pendingLastWords: null, pendingLastWordsSource: null }
+    if (base.pendingHunter) {
+      return { ...base, phase: 'hunter_shoot' }
+    }
+    const win = checkWinCondition(base)
+    if (win) return { ...base, winner: win, phase: 'game_over' }
+    return { ...base, phase: 'day_discuss', currentSpeakerIndex: initialSpeakerIndex(base) }
+  }
+
+  if (source === 'shot') {
+    // 被开枪带走者的遗言结束 → 按原开枪来源继续：夜死流程回白天讨论，放逐流程进入下一夜
+    const shotSource = state.pendingShotSource
+    const base: GameState = { ...state, pendingLastWords: null, pendingLastWordsSource: null, pendingShotSource: null }
+    const win = checkWinCondition(base)
+    if (win) return { ...base, winner: win, phase: 'game_over' }
+    if (shotSource === 'night') {
+      return { ...base, phase: 'day_discuss', currentSpeakerIndex: initialSpeakerIndex(base) }
+    }
+    return { ...base, phase: 'night_guard', round: base.round + 1 }
+  }
+
+  // 放逐遗言
+  const base: GameState = { ...state, pendingLastWords: null, pendingLastWordsSource: null }
   if (base.pendingHunter) {
     return { ...base, phase: 'hunter_shoot' }
   }
-
   const win = checkWinCondition(base)
   if (win) return { ...base, winner: win, phase: 'game_over' }
 
@@ -322,11 +383,15 @@ export function processLastWordsEnd(state: GameState): GameState {
 
 export function processHunterShoot(state: GameState, targetId: string | null): GameState {
   const source = state.pendingShotSource
+  // 进入开枪阶段即公开了开枪者身份（猎人/狼王）→ 翻开枪者的牌
+  const revealShooter = (players: Player[]): Player[] =>
+    players.map((p) => (p.id === state.pendingHunter ? { ...p, isRoleRevealed: true } : p))
   const continueState = (s: GameState): GameState => {
     const win = checkWinCondition(s)
     if (win) return { ...s, winner: win, phase: 'game_over', pendingHunter: null, pendingShotSource: null, pendingLastWordsSource: null }
     if (source === 'night') {
-      return { ...s, pendingHunter: null, pendingShotSource: null, pendingLastWordsSource: null, phase: 'day_announce' }
+      // 夜死流程：死讯已在公告阶段报过，开枪后直接进入白天讨论
+      return { ...s, pendingHunter: null, pendingShotSource: null, pendingLastWordsSource: null, phase: 'day_discuss', currentSpeakerIndex: initialSpeakerIndex(s) }
     }
     return {
       ...s,
@@ -339,11 +404,13 @@ export function processHunterShoot(state: GameState, targetId: string | null): G
   }
 
   if (!targetId) {
-    return continueState(state)
+    // 放弃开枪：仍翻开枪者的牌（其身份已公开）
+    return continueState({ ...state, players: revealShooter(state.players) })
   }
 
-  const newPlayers = state.players.map((p) =>
-    p.id === targetId ? { ...p, isAlive: false, isRoleRevealed: true } : p
+  const newPlayers = revealShooter(state.players).map((p) =>
+    // 被枪杀者保密（不翻牌）
+    p.id === targetId ? { ...p, isAlive: false } : p
   )
   const newLogs = [
     ...state.logs,
@@ -360,11 +427,26 @@ export function processHunterShoot(state: GameState, targetId: string | null): G
     source === 'night' && !state.nightDeaths.includes(targetId)
       ? [...state.nightDeaths, targetId]
       : state.nightDeaths
-  const newState: GameState = {
+  // 开枪已完成，清空 pendingHunter；但保留 pendingShotSource，供被枪杀者遗言结束后路由
+  const shotState: GameState = {
     ...state,
     players: newPlayers,
     logs: newLogs,
     nightDeaths,
+    pendingHunter: null,
   }
-  return continueState(newState)
+
+  // 若这一枪直接结束游戏，则不再发表遗言
+  const win = checkWinCondition(shotState)
+  if (win) {
+    return { ...shotState, winner: win, phase: 'game_over', pendingShotSource: null, pendingLastWordsSource: null }
+  }
+
+  // 被开枪带走的人也发表遗言；遗言结束后按原开枪来源（夜/票）继续流转（见 processLastWordsEnd 的 'shot' 分支）
+  return {
+    ...shotState,
+    phase: 'day_last_words',
+    pendingLastWords: targetId,
+    pendingLastWordsSource: 'shot',
+  }
 }

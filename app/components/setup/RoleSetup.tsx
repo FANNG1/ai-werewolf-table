@@ -8,11 +8,12 @@ const ALL_ROLES: Role[] = ['werewolf', 'wolf_king', 'villager', 'seer', 'witch',
 
 interface Props {
   playerCount: number
-  onConfirm: (roles: Role[]) => void
+  players: Array<{ name: string; isHuman: boolean; preferredRole?: Role | null }>
+  onConfirm: (roles: Role[], preferredRoles: Array<Role | null>) => void
   onBack: () => void
 }
 
-export function RoleSetup({ playerCount, onConfirm, onBack }: Props) {
+export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
   const preset = ROLE_PRESETS.find((p) => p.playerCount === playerCount)
   const [counts, setCounts] = useState<Record<Role, number>>(() => {
     const initial: Record<Role, number> = {} as Record<Role, number>
@@ -22,6 +23,10 @@ export function RoleSetup({ playerCount, onConfirm, onBack }: Props) {
     }
     return initial
   })
+  const humanPlayers = players.filter((p) => p.isHuman)
+  const [preferredRoles, setPreferredRoles] = useState<Array<Role | null>>(
+    () => humanPlayers.map((p) => p.preferredRole ?? null)
+  )
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   const remaining = playerCount - total
@@ -51,7 +56,22 @@ export function RoleSetup({ playerCount, onConfirm, onBack }: Props) {
 
   const werewolfCount = (counts.werewolf || 0) + (counts.wolf_king || 0)
   const villagerCount = total - werewolfCount
-  const isValid = total === playerCount && werewolfCount >= 1 && villagerCount > werewolfCount
+  const preferredCounts = preferredRoles.reduce((acc, role) => {
+    if (role) acc[role] = (acc[role] || 0) + 1
+    return acc
+  }, {} as Record<Role, number>)
+  const preferredValid = ALL_ROLES.every((role) => (preferredCounts[role] || 0) <= (counts[role] || 0))
+  const isValid = total === playerCount && werewolfCount >= 1 && villagerCount > werewolfCount && preferredValid
+
+  const updatePreferredRole = (index: number, role: Role | null) => {
+    const next = [...preferredRoles]
+    next[index] = role
+    setPreferredRoles(next)
+  }
+
+  const confirm = () => {
+    onConfirm(buildRoles(), preferredRoles)
+  }
 
   return (
     <div className="p-4 max-w-lg mx-auto">
@@ -77,6 +97,42 @@ export function RoleSetup({ playerCount, onConfirm, onBack }: Props) {
           ))}
         </div>
       </div>
+
+      {/* Human role preference */}
+      {humanPlayers.length > 0 && (
+        <div className="mb-4">
+          <p className="text-gray-400 text-sm mb-2">真人身份</p>
+          <div className="space-y-2">
+            {humanPlayers.map((player, index) => {
+              const current = preferredRoles[index] ?? null
+              return (
+                <div key={`${player.name}-${index}`} className="bg-gray-800 rounded-xl px-4 py-3">
+                  <div className="text-white text-sm font-medium mb-2">{player.name}</div>
+                  <select
+                    value={current ?? ''}
+                    onChange={(e) => updatePreferredRole(index, e.target.value ? (e.target.value as Role) : null)}
+                    className="w-full bg-gray-900 text-white rounded-lg px-3 py-2 border border-gray-700 outline-none focus:border-blue-500"
+                  >
+                    <option value="">随机身份</option>
+                    {ALL_ROLES.map((role) => {
+                      const usedByOthers = preferredRoles.filter((r, i) => i !== index && r === role).length
+                      const available = (counts[role] || 0) - usedByOthers
+                      return (
+                        <option key={role} value={role} disabled={available <= 0}>
+                          {ROLE_EMOJIS[role]} {ROLE_NAMES[role]}{available <= 0 ? '（已无剩余）' : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                  {current && (preferredCounts[current] || 0) > (counts[current] || 0) && (
+                    <p className="text-red-400 text-xs mt-2">当前角色数量不足，请增加该身份或改为随机。</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Role list */}
       <div className="space-y-2 mb-4">
@@ -145,7 +201,7 @@ export function RoleSetup({ playerCount, onConfirm, onBack }: Props) {
           返回
         </button>
         <button
-          onClick={() => onConfirm(buildRoles())}
+          onClick={confirm}
           disabled={!isValid}
           className="flex-2 flex-grow bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white rounded-xl py-3 font-semibold"
         >

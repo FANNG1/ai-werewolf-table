@@ -141,6 +141,7 @@ export function GameReview({ state, onNewGame }: Props) {
           const deaths = deathLogs(r)
           const spks = speechLogs(r)
           const nightActions = getNightActionsForRound(state, r)
+          const roundVotes = state.votes.filter((v) => v.round === r)
           const nightDeaths = (nightDeathLog(r)?.data.deaths as string[]) || []
           const isExpanded = expandedRound === r
 
@@ -170,18 +171,30 @@ export function GameReview({ state, onNewGame }: Props) {
                       <p className="text-gray-500 text-sm">无特殊行动</p>
                     ) : (
                       <div className="space-y-1">
-                        {nightActions.map((d, i) => (
-                          <div key={i} className="text-sm flex items-start gap-1.5">
-                            <span>{d.icon}</span>
-                            <span>
-                              <span className={d.isWolf ? 'text-red-300' : 'text-gray-300'}>
-                                {d.roleName}（{d.actorName}）
-                              </span>
-                              <span className="text-gray-400">：{d.description}</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+	                        {nightActions.map((d, i) => (
+	                          <div key={i} className="text-sm">
+	                            <div className="flex items-start gap-1.5">
+	                            <span>{d.icon}</span>
+	                            <span>
+	                              <span className={d.isWolf ? 'text-red-300' : 'text-gray-300'}>
+	                                {d.roleName}（{d.actorName}）
+	                              </span>
+	                              <span className="text-gray-400">：{d.description}</span>
+	                            </span>
+	                            </div>
+	                            {d.reason && <div className="text-xs text-gray-500 ml-6">理由：{d.reason}</div>}
+	                            {d.llmPrompt && (
+	                              <details className="ml-6 mt-1">
+	                                <summary className="text-xs text-blue-300 cursor-pointer">LLM 请求</summary>
+	                                <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-48 overflow-y-auto">{d.llmPrompt}</pre>
+	                                {d.llmResponse && (
+	                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-24 overflow-y-auto">返回：{d.llmResponse}</pre>
+	                                )}
+	                              </details>
+	                            )}
+	                          </div>
+	                        ))}
+	                      </div>
                     )}
                     <p className="text-sm mt-1.5">
                       {nightDeaths.length === 0 ? (
@@ -199,27 +212,67 @@ export function GameReview({ state, onNewGame }: Props) {
                     <div className="mb-3">
                       <p className="text-amber-400 text-sm font-medium mb-1">☀️ 白天发言</p>
                       <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {spks.map((s) => {
-                          const p = players.find((pl) => pl.id === s.playerId)
-                          return (
-                            <div key={s.id} className="text-sm">
-                              <span className="text-gray-300 font-medium">
-                                {p?.name}
-                                {p && (
-                                  <span className={`ml-1 text-xs ${isWerewolf(p.role) ? 'text-red-400' : 'text-green-400'}`}>
-                                    [{ROLE_NAMES[p.role]}]
-                                  </span>
-                                )}
-                              </span>
-                              <span className="text-gray-400 ml-1">：{s.content}</span>
-                            </div>
-                          )
-                        })}
+	                        {spks.map((s) => {
+	                          const p = players.find((pl) => pl.id === s.playerId)
+	                          const prompt = s.llmTrace ? `${s.llmTrace.instruction}\n\n${s.llmTrace.perspective}\n\n${s.llmTrace.task}` : null
+	                          return (
+	                            <div key={s.id} className="text-sm">
+	                              <div>
+	                                <span className="text-gray-300 font-medium">
+	                                  {p?.name}
+	                                  {s.isLastWords && <span className="text-purple-300 text-xs ml-1">[遗言]</span>}
+	                                  {p && (
+	                                    <span className={`ml-1 text-xs ${isWerewolf(p.role) ? 'text-red-400' : 'text-green-400'}`}>
+	                                      [{ROLE_NAMES[p.role]}]
+	                                    </span>
+	                                  )}
+	                                </span>
+	                                <span className="text-gray-400 ml-1">：{s.content}</span>
+	                              </div>
+	                              {prompt && (
+	                                <details className="mt-1">
+	                                  <summary className="text-xs text-blue-300 cursor-pointer">LLM 请求 / 返回</summary>
+	                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-48 overflow-y-auto">{prompt}</pre>
+	                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-24 overflow-y-auto">返回：{s.llmTrace?.rawResponse}</pre>
+	                                </details>
+	                              )}
+	                            </div>
+	                          )
+	                        })}
                       </div>
-                    </div>
-                  )}
+	                    </div>
+	                  )}
 
-                  {/* Deaths by vote */}
+	                  {/* Votes */}
+	                  {roundVotes.length > 0 && (
+	                    <div className="mb-3">
+	                      <p className="text-cyan-400 text-sm font-medium mb-1">🗳️ 投票</p>
+	                      <div className="space-y-1.5">
+	                        {roundVotes.map((v) => {
+	                          const voter = players.find((p) => p.id === v.voterId)
+	                          const target = players.find((p) => p.id === v.targetId)
+	                          const prompt = v.llmTrace ? `${v.llmTrace.instruction}\n\n${v.llmTrace.perspective}\n\n${v.llmTrace.task}` : null
+	                          return (
+	                            <div key={`${v.round}-${v.voterId}`} className="text-sm">
+	                              <div className="text-gray-400">
+	                                <span className="text-gray-300">{voter?.name}</span> → <span className="text-gray-300">{target?.name}</span>
+	                              </div>
+	                              {v.reason && <div className="text-xs text-gray-500">理由：{v.reason}</div>}
+	                              {prompt && (
+	                                <details className="mt-1">
+	                                  <summary className="text-xs text-blue-300 cursor-pointer">LLM 请求 / 返回</summary>
+	                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-48 overflow-y-auto">{prompt}</pre>
+	                                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-gray-500 bg-gray-950 rounded p-2 max-h-24 overflow-y-auto">返回：{v.llmTrace?.rawResponse}</pre>
+	                                </details>
+	                              )}
+	                            </div>
+	                          )
+	                        })}
+	                      </div>
+	                    </div>
+	                  )}
+
+	                  {/* Deaths by vote */}
                   {deaths.map((log) => {
                     if (log.data.idiotSaved as boolean) {
                       const p = players.find((pl) => pl.id === log.data.playerId)

@@ -73,7 +73,7 @@ export function DayPhase({
               if (!p) return null
               return (
                 <div key={id} className="text-red-300 font-semibold text-lg">
-                  {p.name}（{p.role === 'seer' ? '预言家' : p.role === 'witch' ? '女巫' : p.role === 'hunter' ? '猎人' : '玩家'}）出局
+                  {p.name} 出局（身份保密）
                 </div>
               )
             })}
@@ -104,7 +104,11 @@ export function DayPhase({
           {dying?.name} 的遗言
         </h2>
         <p className="text-purple-400 text-sm mb-6 text-center">
-          {pendingLastWordsSource === 'night' ? '昨夜出局，请发表遗言' : '被放逐出局，请发表最后的发言'}
+          {pendingLastWordsSource === 'night'
+            ? '昨夜出局，请发表遗言'
+            : pendingLastWordsSource === 'shot'
+              ? '被开枪带走，请发表遗言'
+              : '被放逐出局，请发表最后的发言'}
         </p>
 
         {isDyingHuman && !lwSpeech ? (

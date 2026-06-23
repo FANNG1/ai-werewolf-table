@@ -3,14 +3,13 @@
 import { useState } from 'react'
 import { PlayerSetup } from './components/setup/PlayerSetup'
 import { RoleSetup } from './components/setup/RoleSetup'
-import type { AiLevel, GameConfig, Role } from './lib/types'
+import type { GameConfig, Role } from './lib/types'
 
 type SetupStep = 'landing' | 'players' | 'roles'
 
 interface PlayerConfig {
   name: string
   isHuman: boolean
-  aiLevel?: AiLevel
   preferredRole?: Role | null
 }
 

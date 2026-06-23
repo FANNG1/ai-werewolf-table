@@ -1,12 +1,10 @@
 'use client'
 
 import { useState } from 'react'
-import type { AiLevel } from '../../lib/types'
 
 interface PlayerConfig {
   name: string
   isHuman: boolean
-  aiLevel?: AiLevel
 }
 
 interface Props {
@@ -17,18 +15,11 @@ const AI_NAMES = [
   '小明', '小红', '小刚', '小丽', '小强', '小华', '小燕', '小龙', '小芳', '小虎'
 ]
 
-const AI_LEVELS: { value: AiLevel; label: string; desc: string }[] = [
-  { value: 'easy', label: '简单', desc: '适合新手' },
-  { value: 'medium', label: '中等', desc: '有点挑战' },
-  { value: 'hard', label: '困难', desc: '高手难度' },
-]
-
 export function PlayerSetup({ onConfirm }: Props) {
   const [humanPlayers, setHumanPlayers] = useState<{ name: string }[]>([
     { name: '' },
   ])
   const [aiCount, setAiCount] = useState(5)
-  const [aiLevel, setAiLevel] = useState<AiLevel>('medium')
 
   const totalCount = humanPlayers.length + aiCount
 
@@ -55,7 +46,6 @@ export function PlayerSetup({ onConfirm }: Props) {
     const ais = aiNames.map((name) => ({
       name,
       isHuman: false,
-      aiLevel,
     }))
 
     onConfirm([...humans, ...ais])
@@ -123,25 +113,9 @@ export function PlayerSetup({ onConfirm }: Props) {
         </div>
       </div>
 
-      {/* AI difficulty */}
-      <div className="mb-8">
-        <label className="text-gray-300 font-medium block mb-3">AI 难度</label>
-        <div className="grid grid-cols-3 gap-2">
-          {AI_LEVELS.map((level) => (
-            <button
-              key={level.value}
-              onClick={() => setAiLevel(level.value)}
-              className={`rounded-xl p-3 text-center border transition-all ${
-                aiLevel === level.value
-                  ? 'border-blue-500 bg-blue-900 text-white'
-                  : 'border-gray-700 bg-gray-800 text-gray-400'
-              }`}
-            >
-              <div className="font-semibold">{level.label}</div>
-              <div className="text-xs mt-0.5">{level.desc}</div>
-            </button>
-          ))}
-        </div>
+      {/* 所有 AI 均为资深玩家（困难），不再提供难度选择 */}
+      <div className="mb-8 rounded-xl border border-gray-700 bg-gray-800 p-3 text-center text-sm text-gray-400">
+        🧠 所有 AI 玩家均为<span className="text-gray-200 font-medium">资深水平</span>，会认真推理与伪装
       </div>
 
       <button

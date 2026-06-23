@@ -137,7 +137,7 @@ export function buildGameTranscript(state: GameState): string {
 
   lines.push('【全部玩家身份】')
   for (const p of players) {
-    const tag = p.isHuman ? '（真人玩家）' : `（AI·${p.aiLevel ?? '中等'}）`
+    const tag = p.isHuman ? '（真人玩家）' : '（AI·资深）'
     const team = isWerewolf(p.role) ? '狼人阵营' : '村民阵营'
     lines.push(`- ${p.name}${tag}：${ROLE_NAMES[p.role]}（${team}）${p.isAlive ? '存活' : '出局'}`)
   }

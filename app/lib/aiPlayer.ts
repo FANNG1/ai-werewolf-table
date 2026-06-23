@@ -1,4 +1,4 @@
-import type { AiLevel, AiRequestTrace, GameState, Player, Role, WolfPlan } from './types'
+import type { AiRequestTrace, GameState, Player, Role, WolfPlan } from './types'
 import { ROLE_NAMES, isWerewolf } from './roles'
 import { computeRoundStrategy } from './strategy'
 
@@ -223,17 +223,12 @@ function buildCoordinationSignal(state: GameState): string[] {
 }
 
 // ───────────────────────── 角色 / 难度指令 ─────────────────────────
-function getLevelInstruction(level: AiLevel, role: Role): string {
-  if (level === 'easy') {
-    return '你是新手玩家，逻辑不够严密，有时会判断失误、怀疑错人，发言比较直白简单。'
-  }
-  if (level === 'medium') {
-    return '你是中等水平玩家，能进行基本的逻辑推理，发言较合理，偶有小失误。'
-  }
+// 所有 AI 均为资深玩家（已去掉难度分级）
+function getLevelInstruction(role: Role): string {
   if (isWerewolf(role)) {
-    return '你是高手级狼人，冷静理性，善于伪装成好人、构造合理的误导、带节奏让好人内斗，并保护狼同伴。'
+    return '你是资深狼人，冷静理性，善于伪装成好人、构造合理的误导、带节奏让好人内斗，并保护狼同伴。'
   }
-  return '你是高手级好人，高度理性，综合所有发言、死亡和投票信息进行严密推理，精准锁定狼人。'
+  return '你是资深好人，高度理性，综合所有发言、死亡和投票信息进行严密推理，精准锁定狼人。'
 }
 
 function getRoleStrategy(role: Role): string {
@@ -328,7 +323,7 @@ function getWerewolfCommonSenseInstruction(): string {
 }
 
 function getInstruction(player: Player): string {
-  return `你正在玩中文狼人杀游戏。${getLevelInstruction(player.aiLevel || 'medium', player.role)}
+  return `你正在玩中文狼人杀游戏。${getLevelInstruction(player.role)}
 
 游戏规则：
 - 好人胜利：所有狼人出局。
@@ -856,24 +851,38 @@ function normalizeWolfPlan(raw: Record<string, unknown>, wolves: Player[], state
 function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
   const candidates = state.players.filter((p) => p.isAlive && !isWerewolf(p.role))
   const pushTarget = candidates[0]?.id ?? null
+  const whiteWolf = wolves.find((w) => w.role === 'white_wolf_king')
+  const fakeClaimWolfId = whiteWolf?.id ?? null
   return {
     round: state.round,
-    tactic: 'misdirect',
-    fakeClaimWolfId: null,
+    tactic: fakeClaimWolfId ? 'fake_claim' : 'misdirect',
+    fakeClaimWolfId,
     pushTargetId: pushTarget,
     protectWolfId: wolves[0]?.id ?? null,
     busWolfId: null,
     talkingPointsByWolfId: Object.fromEntries(
-      wolves.map((w) => [w.id, `伪装好人，质疑 ${pushTarget ? planPlayerName(state, pushTarget) : '强势好人'} 的发言逻辑。`])
+      wolves.map((w) => [w.id, w.role === 'white_wolf_king' && fakeClaimWolfId === w.id
+        ? `承担冲锋位，可悍跳预言家并把 ${pushTarget ? planPlayerName(state, pushTarget) : '强势好人'} 报成查杀；若局势崩盘再考虑自爆带走强神。`
+        : w.role === 'wolf_beauty'
+          ? '深水隐藏，不主动悍跳，发言像谨慎好人，夜晚魅惑关键神职或最可能推你的人。'
+          : `伪装好人，质疑 ${pushTarget ? planPlayerName(state, pushTarget) : '强势好人'} 的发言逻辑。`])
     ),
-    notes: '统一把焦点推向好人，避免互相矛盾。',
+    notes: fakeClaimWolfId ? '白狼王承担悍跳/冲锋，狼美人和普通狼配合做深水或站边。' : '统一把焦点推向好人，避免互相矛盾。',
   }
 }
 
 export async function generateWolfPlan(wolves: Player[], state: GameState): Promise<WolfPlan> {
   if (wolves.length === 0) return fallbackWolfPlan(wolves, state)
   const leader = wolves[0]
-  const wolfNames = wolves.map((w) => `${w.name}(${w.id})`).join('、')
+  const wolfNames = wolves.map((w) => `${w.name}(${w.id}, ${ROLE_NAMES[w.role]})`).join('、')
+  const specialWolfNotes = [
+    wolves.some((w) => w.role === 'white_wolf_king')
+      ? '白狼王适合承担高风险悍跳/冲锋位：优先考虑让白狼王悍跳预言家或强势带队；如果悍跳失败或被真预言家查杀，白天可自爆带走真预言家/强神止损。'
+      : '',
+    wolves.some((w) => w.role === 'wolf_beauty')
+      ? '狼美人更适合深水隐藏位：不要优先安排她悍跳；让她白天低调做身份，夜晚魅惑真预言家、女巫、守卫、猎人或最可能推她出局的强好人。'
+      : '',
+  ].filter(Boolean).join('\n')
   const aliveNames = state.players.filter((p) => p.isAlive).map((p) => `${p.name}(${p.id})`).join('、')
   const killId = state.nightActions
     .filter((a) => a.round === state.round && a.actionType === 'kill')
@@ -882,10 +891,11 @@ export async function generateWolfPlan(wolves: Player[], state: GameState): Prom
   const task = `现在是第${state.round}天夜晚，狼队睁眼商议明天白天的作战计划。${killName ? `你们今晚决定击杀【${killName}】（但天亮前并不知道是否击杀成功，也不知道女巫/守卫是否干预）。` : ''}
 存活狼队成员：${wolfNames}。
 存活玩家：${aliveNames}。
+${specialWolfNotes ? `特殊狼人分工建议：\n${specialWolfNotes}` : ''}
 请在【还不知道天亮后实际死亡结果】的前提下，结合已有发言和局势，预先商定一个结构化计划。
 字段说明：
 - tactic 必须是 fake_claim/deep_cover/bus/rush_vote/misdirect 之一。
-- fakeClaimWolfId/protectWolfId/busWolfId 必须填狼人的 id 或 null。
+- fakeClaimWolfId/protectWolfId/busWolfId 必须填狼人的 id 或 null。若有白狼王且需要悍跳，优先把 fakeClaimWolfId 给白狼王；若有狼美人，通常不要把 fakeClaimWolfId 给狼美人，除非别无选择。
 - pushTargetId 必须填存活玩家 id 或 null。
 - talkingPointsByWolfId 必须给每个狼 id 一句个人话术，避免两只狼做同一件事。
 返回 JSON：{"tactic":"misdirect","fakeClaimWolfId":null,"pushTargetId":"玩家id或null","protectWolfId":"狼人id或null","busWolfId":"狼人id或null","talkingPointsByWolfId":{"狼人id":"个人话术"},"notes":"简短备注"}`
@@ -1165,10 +1175,13 @@ export async function decideWolfBeautyCharm(
 ): Promise<AiTargetDecision> {
   if (candidates.length === 0) return { targetId: null, reason: '没有可魅惑目标' }
   const displayedCandidates = shuffleCopy(candidates)
+  const publicClaimTargetIds = new Set(state.publicClaims.filter((c) => ['seer', 'witch', 'hunter', 'guard'].includes(c.claimType)).map((c) => c.claimantId))
+  const pressureOnMe = state.votes.filter((v) => v.round === state.round && v.targetId === wolfBeauty.id).map((v) => state.players.find((p) => p.id === v.voterId)?.name).filter(Boolean).join('、')
+  const priorityNames = candidates.filter((c) => publicClaimTargetIds.has(c.id)).map((c) => c.name).join('、')
   const task = `现在是夜晚，你是狼美人，请选择今晚魅惑的一名非狼人玩家。
 如果你之后死亡，最近被魅惑且仍存活的玩家会殉情出局。
 可选目标：${displayedCandidates.map((c) => c.name).join('、')}。
-优先魅惑可信预言家、女巫、守卫、猎人、强势好人、或白天可能推动你出局的人；不要因为列表顺序默认选择玩家1。
+优先级：1）已跳预言家/女巫/守卫/猎人的关键神职；2）白天投你或强推你的人；3）强势带队好人；4）能帮助狼队接近屠神/屠民的关键边。${priorityNames ? `\n公开跳身份/报强信息者：${priorityNames}。` : ''}${pressureOnMe ? `\n本轮投你或明显给你压力的人：${pressureOnMe}。` : ''}不要因为列表顺序默认选择玩家1。
 返回 JSON：{"target":"玩家名字","reason":"简短理由"}`
 
   try {
@@ -1182,8 +1195,10 @@ export async function decideWolfBeautyCharm(
   }
 
   const claimed = findClaimedSeers(state)
-  const priority = candidates.filter((c) => claimed.includes(c.id))
-  return { targetId: (priority[0] ?? pickRandom(candidates)).id, reason: priority.length > 0 ? 'AI 输出无效，兜底魅惑疑似预言家' : 'AI 输出无效，随机选择魅惑目标兜底' }
+  const claimPriority = candidates.filter((c) => claimed.includes(c.id) || state.publicClaims.some((pc) => pc.claimantId === c.id && ['seer', 'witch', 'hunter', 'guard'].includes(pc.claimType)))
+  const pressurePriority = candidates.filter((c) => state.votes.some((v) => v.round === state.round && v.voterId === c.id && v.targetId === wolfBeauty.id))
+  const fallback = claimPriority[0] ?? pressurePriority[0] ?? pickRandom(candidates)
+  return { targetId: fallback.id, reason: claimPriority.length > 0 ? 'AI 输出无效，兜底魅惑公开强身份/疑似神职' : pressurePriority.length > 0 ? 'AI 输出无效，兜底魅惑白天给自己压力的玩家' : 'AI 输出无效，随机选择魅惑目标兜底' }
 }
 
 export async function decideWhiteWolfKingExplosion(
@@ -1198,13 +1213,17 @@ export async function decideWhiteWolfKingExplosion(
   )
   const aliveWolves = state.players.filter((p) => p.isAlive && isWerewolf(p.role)).length
   const aliveVillagers = state.players.filter((p) => p.isAlive && !isWerewolf(p.role)).length
-  const urgency = claimedByRealSeer || aliveWolves <= 1 || aliveVillagers <= aliveWolves + 2
+  const votesOnMe = state.votes.filter((v) => v.round === state.round && v.targetId === whiteWolf.id).length
+  const maxOtherVotes = Math.max(0, ...state.players.filter((p) => p.isAlive && p.id !== whiteWolf.id).map((p) => state.votes.filter((v) => v.round === state.round && v.targetId === p.id).length))
+  const highVotePressure = votesOnMe > 0 && votesOnMe >= maxOtherVotes
+  const exposedPowerTargets = candidates.filter((c) => state.publicClaims.some((pc) => pc.claimantId === c.id && ['seer', 'witch', 'hunter', 'guard'].includes(pc.claimType)))
+  const urgency = claimedByRealSeer || highVotePressure || aliveWolves <= 1 || aliveVillagers <= aliveWolves + 2 || exposedPowerTargets.length > 0
   if (!urgency) return { explode: false, targetId: null, reason: '当前没有必须自爆的硬局势，继续伪装发言' }
 
   const displayedCandidates = shuffleCopy(candidates)
   const task = `现在是白天讨论阶段，你是白狼王，可以选择是否自爆并带走一名玩家。
-当前局势${claimedByRealSeer ? '：你已被真预言家查杀，身份压力很高。' : '：需要判断自爆是否能换掉关键好人。'}
-可带走目标：${displayedCandidates.map((c) => c.name).join('、')}。
+当前局势${claimedByRealSeer ? '：你已被真预言家查杀，身份压力很高。' : highVotePressure ? '：你当前处在高票/被推出风险中。' : '：需要判断自爆是否能换掉关键好人。'}
+可带走目标：${displayedCandidates.map((c) => c.name).join('、')}。${exposedPowerTargets.length ? `\n公开强身份/关键目标：${exposedPowerTargets.map((p) => p.name).join('、')}。` : ''}
 只有当自爆能明显服务狼队时才爆；目标优先可信预言家、女巫、守卫、猎人或强势带队好人，避免带走狼同伴。
 返回 JSON：{"explode": true或false, "target":"玩家名字或null", "reason":"简短理由"}`
 
@@ -1222,6 +1241,9 @@ export async function decideWhiteWolfKingExplosion(
     if (seerClaim && candidates.some((c) => c.id === seerClaim.claimantId)) {
       return { explode: true, targetId: seerClaim.claimantId, reason: '被真预言家查杀，兜底自爆带走预言家' }
     }
+  }
+  if (highVotePressure && exposedPowerTargets[0]) {
+    return { explode: true, targetId: exposedPowerTargets[0].id, reason: '处在高票压力，兜底自爆带走公开强身份' }
   }
   return { explode: false, targetId: null, reason: 'AI 输出无效，且没有明确自爆收益，继续发言' }
 }

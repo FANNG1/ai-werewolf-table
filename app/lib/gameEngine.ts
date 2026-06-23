@@ -29,7 +29,6 @@ export function initGame(config: GameConfig): GameState {
     role: assignedRoles[i],
     isHuman: p.isHuman,
     isAlive: true,
-    aiLevel: p.aiLevel,
     isRoleRevealed: false,
     idiotUsed: false,
   }))

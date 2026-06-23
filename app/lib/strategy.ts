@@ -145,6 +145,7 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
   const base = { role: player.role }
   const plan = state.wolfPlan && state.wolfPlanRound === state.round ? state.wolfPlan : null
   const wolfIds = new Set(state.players.filter((p) => isWerewolf(p.role)).map((p) => p.id))
+  const realSeerClaim = state.publicClaims.find((c) => c.claimType === 'seer' && c.result === 'werewolf' && !!c.targetId && !wolfIds.has(c.claimantId))
 
   // 由「非狼」的预言家声明发出的查杀（真预言家或与本狼队无关的悍跳者）
   const seerKillClaims = state.publicClaims.filter(
@@ -168,13 +169,47 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
       revealPrivateInfo: isFakeClaimer,
       pushTargetId: isFakeClaimer ? plan?.pushTargetId ?? null : null,
       talkingGoal: isFakeClaimer
-        ? `你被对方"预言家"查杀，而你正是狼队安排的悍跳预言家：直接对跳，报出你的"查验结果"（把${pushName ?? '一名好人'}报成查杀），坚称对方才是悍跳的狼，争夺预言家信任。`
-        : `你被"预言家"查杀了，绝不能沉默装没事：强势回应——质疑对方验人逻辑与动机、反咬他是悍跳的狼，给出你不是狼的合理解释，把火引向别处。`,
+        ? `你被对方"预言家"查杀，而你正是狼队安排的悍跳预言家：直接对跳，报出你的"查验结果"（把${pushName ?? '一名好人'}报成查杀），坚称对方才是悍跳的狼，争夺预言家信任。${player.role === 'white_wolf_king' ? '你是白狼王，如果本轮对跳明显崩盘，后续应考虑自爆带走真预言家或强神。' : ''}`
+        : player.role === 'white_wolf_king'
+          ? `你是白狼王且被"预言家"查杀。先强势反咬对方是悍跳狼、争取白天话语权；如果场上明显站不住，准备自爆带走这个预言家或其他强神止损。`
+          : `你被"预言家"查杀了，绝不能沉默装没事：强势回应——质疑对方验人逻辑与动机、反咬他是悍跳的狼，给出你不是狼的合理解释，把火引向别处。`,
       reason: '被预言家查杀，必须强势回应',
     }
   }
 
-  // 2) 计划指定我悍跳预言家 → 强制真的跳出来
+  // 2) 白狼王在计划未指定时，也适合作为主动悍跳/冲锋位
+  if (player.role === 'white_wolf_king' && !plan?.fakeClaimWolfId && realSeerClaim && realSeerClaim.claimantId !== player.id) {
+    const targetId = plan?.pushTargetId ?? realSeerClaim.claimantId
+    const targetName = nameOf(state, targetId)
+    return {
+      ...base,
+      shouldClaim: true,
+      mustClaimRole: 'seer',
+      claimUrgency: 'must',
+      revealPrivateInfo: true,
+      pushTargetId: targetId,
+      talkingGoal: '你是白狼王，适合承担冲锋悍跳位。场上已有预言家信息威胁狼队：主动悍跳预言家，报' + targetName + '为查杀或强狼面，和对方抢预言家身份；如果后续悍跳失败，再考虑自爆带走真预言家/强神。',
+      reason: '白狼王主动承担悍跳冲锋位',
+    }
+  }
+
+  // 3) 狼美人默认深水，不抢悍跳；被迫悍跳时才执行计划
+  if (player.role === 'wolf_beauty' && plan?.fakeClaimWolfId !== player.id) {
+    const charm = [...state.nightActions].reverse().find((a) => a.actorId === player.id && a.actionType === 'charm' && a.targetId)
+    const charmName = charm?.targetId ? nameOf(state, charm.targetId) : null
+    const pushPart = pushName ? '（' + pushName + '）' : ''
+    const charmPart = charmName ? '你昨晚魅惑了' + charmName + '，不要暴露这点；若你可能出局，白天尽量把焦点转向别人，让殉情收益留到关键时刻。' : ''
+    return {
+      ...base,
+      shouldClaim: false,
+      claimUrgency: 'hide',
+      revealPrivateInfo: false,
+      pushTargetId: plan?.pushTargetId ?? null,
+      talkingGoal: '你是狼美人，本轮默认深水隐藏：不要悍跳、不要强冲在最前面，用谨慎好人视角分析；可以轻踩狼队主推目标' + pushPart + '，但重点是降低自己的处理优先级。' + charmPart,
+      reason: '狼美人默认深水隐藏',
+    }
+  }
+  // 4) 计划指定我悍跳预言家 → 强制真的跳出来
   if (isFakeClaimer) {
     return {
       ...base,
@@ -188,7 +223,7 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
     }
   }
 
-  // 3) 狼同伴被「预言家」查杀（我没被查杀）→ 按计划配合
+  // 5) 狼同伴被「预言家」查杀（我没被查杀）→ 按计划配合
   if (teammateKill) {
     const mateName = nameOf(state, teammateKill.targetId)
     const seerName = nameOf(state, teammateKill.claimantId)
@@ -206,7 +241,7 @@ function computeWerewolfStrategy(player: Player, state: GameState): PlayerRoundS
     }
   }
 
-  // 4) 深水/倒钩等常规分工 → 交给已注入的 wolfPlan，不重复指令
+  // 6) 深水/倒钩等常规分工 → 交给已注入的 wolfPlan，不重复指令
   return null
 }
 

@@ -27,15 +27,12 @@ export type Phase =
   | 'game_over'
   | 'review'
 
-export type AiLevel = 'easy' | 'medium' | 'hard'
-
 export interface Player {
   id: string
   name: string
   role: Role
   isHuman: boolean
   isAlive: boolean
-  aiLevel?: AiLevel
   isRoleRevealed: boolean
   idiotUsed?: boolean
 }
@@ -112,7 +109,6 @@ export interface GameConfig {
   players: Array<{
     name: string
     isHuman: boolean
-    aiLevel?: AiLevel
     preferredRole?: Role | null
   }>
   roles: Role[]

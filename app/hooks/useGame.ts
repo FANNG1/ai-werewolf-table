@@ -16,7 +16,7 @@ import {
   processVote,
 } from '../lib/gameEngine'
 import { isWerewolf } from '../lib/roles'
-import type { AiLevel, GameConfig, GameState, NightAction, Phase, PublicClaim, Role } from '../lib/types'
+import type { GameConfig, GameState, NightAction, Phase, PublicClaim, Role } from '../lib/types'
 
 function genId() {
   return Math.random().toString(36).slice(2, 9)

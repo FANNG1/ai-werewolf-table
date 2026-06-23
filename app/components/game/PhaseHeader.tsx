@@ -6,6 +6,7 @@ const PHASE_LABELS: Record<Phase, string> = {
   setup: '准备中',
   night_guard: '第一夜 · 守卫行动',
   night_werewolf: '深夜 · 狼人行动',
+  night_wolf_beauty: '深夜 · 狼美人魅惑',
   night_seer: '深夜 · 预言家行动',
   night_witch: '深夜 · 女巫行动',
   day_announce: '天亮了',

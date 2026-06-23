@@ -225,6 +225,13 @@ function computeWitchStrategy(player: Player, state: GameState): PlayerRoundStra
   const poisonedWolf = myPoison?.targetId
     ? state.players.find((p) => p.id === myPoison.targetId && isWerewolf(p.role) && p.isRoleRevealed) ?? null
     : null
+  const myHeals = state.nightActions.filter((a) => a.actorId === player.id && a.actionType === 'heal' && a.targetId)
+  const savedNames = myHeals
+    .map((a) => state.players.find((p) => p.id === a.targetId)?.name)
+    .filter((name): name is string => !!name)
+  const savedInfoLine = savedNames.length > 0
+    ? `你救过的刀口/银水是【${savedNames.join('、')}】。这属于女巫私密强信息；隐藏身份时不要直接报银水，但应私下提高其可信度，尤其当他起跳预言家或被强推时，不要像闭眼好人一样轻易踩他。`
+    : ''
   const killedBySeer = state.publicClaims.some(
     (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === player.id
   )
@@ -265,7 +272,7 @@ function computeWitchStrategy(player: Player, state: GameState): PlayerRoundStra
   // 5) 默认隐藏
   return {
     ...base, shouldClaim: false, claimUrgency: 'hide', revealPrivateInfo: false, pushTargetId: null,
-    talkingGoal: `本轮先隐藏女巫身份：只做逻辑分析、表达怀疑，不要暴露你是女巫或用药情况，留到关键时刻再跳。`,
+    talkingGoal: `本轮先隐藏女巫身份：只做逻辑分析、表达怀疑，不要暴露你是女巫或用药情况，留到关键时刻再跳。${savedInfoLine ? `\n${savedInfoLine}` : ''}`,
     reason: '局势不急，隐藏女巫',
   }
 }

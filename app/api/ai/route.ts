@@ -15,14 +15,23 @@ export async function POST(req: NextRequest) {
     }
     if (json) body.response_format = { type: 'json_object' }
 
-    const resp = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify(body),
-    })
+    // 超时保护：DeepSeek 挂住时中断，避免服务端路由无限等待
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 40000)
+    let resp: Response
+    try {
+      resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!resp.ok) {
       const err = await resp.text()

@@ -61,6 +61,22 @@ export function getNightActionsForRound(state: GameState, round: number): NightA
     })
   }
 
+
+  // 狼美人
+  for (const a of actions.filter((x) => x.actionType === 'charm')) {
+    const actor = state.players.find((p) => p.id === a.actorId)
+    details.push({
+      icon: '🌹',
+      actorName: actor?.name ?? '狼美人',
+      roleName: '狼美人',
+      description: `魅惑了 ${nameOf(state, a.targetId)}`,
+      reason: a.reason,
+      llmPrompt: a.llmTrace ? `${a.llmTrace.instruction}\n\n${a.llmTrace.perspective}\n\n${a.llmTrace.task}` : undefined,
+      llmResponse: a.llmTrace?.rawResponse,
+      isWolf: true,
+    })
+  }
+
   // 预言家
   for (const a of actions.filter((x) => x.actionType === 'check')) {
     const actor = state.players.find((p) => p.id === a.actorId)

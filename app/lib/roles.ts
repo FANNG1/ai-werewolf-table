@@ -3,6 +3,8 @@ import type { Role, Team } from './types'
 export const ROLE_NAMES: Record<Role, string> = {
   werewolf: '狼人',
   wolf_king: '狼王',
+  white_wolf_king: '白狼王',
+  wolf_beauty: '狼美人',
   villager: '村民',
   seer: '预言家',
   witch: '女巫',
@@ -14,6 +16,8 @@ export const ROLE_NAMES: Record<Role, string> = {
 export const ROLE_TEAMS: Record<Role, Team> = {
   werewolf: 'werewolf',
   wolf_king: 'werewolf',
+  white_wolf_king: 'werewolf',
+  wolf_beauty: 'werewolf',
   villager: 'villager',
   seer: 'villager',
   witch: 'villager',
@@ -25,6 +29,8 @@ export const ROLE_TEAMS: Record<Role, Team> = {
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   werewolf: '每晚与同伴一起选择击杀一名玩家',
   wolf_king: '狼人阵营，死亡时可以射杀一名玩家',
+  white_wolf_king: '狼人阵营，白天可自爆并带走一名玩家',
+  wolf_beauty: '狼人阵营，每晚魅惑一名非狼人；死亡时魅惑目标殉情',
   villager: '没有特殊技能，投票找出狼人',
   seer: '每晚可以查验一名玩家的阵营（好人/狼人）',
   witch: '拥有一瓶解药（救人）和一瓶毒药（杀人），各用一次',
@@ -36,6 +42,8 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
 export const ROLE_EMOJIS: Record<Role, string> = {
   werewolf: '🐺',
   wolf_king: '👑',
+  white_wolf_king: '💥',
+  wolf_beauty: '🌹',
   villager: '🧑‍🌾',
   seer: '🔮',
   witch: '🧙‍♀️',
@@ -52,9 +60,24 @@ export interface RolePreset {
 
 export const ROLE_PRESETS: RolePreset[] = [
   {
+    name: '4人入门局',
+    playerCount: 4,
+    roles: ['werewolf', 'seer', 'witch', 'villager'],
+  },
+  {
+    name: '5人快速局',
+    playerCount: 5,
+    roles: ['werewolf', 'seer', 'witch', 'hunter', 'villager'],
+  },
+  {
     name: '6人经典局',
     playerCount: 6,
     roles: ['werewolf', 'werewolf', 'seer', 'witch', 'hunter', 'villager'],
+  },
+  {
+    name: '7人进阶局',
+    playerCount: 7,
+    roles: ['werewolf', 'werewolf', 'seer', 'witch', 'hunter', 'villager', 'villager'],
   },
   {
     name: '8人标准局',
@@ -62,10 +85,28 @@ export const ROLE_PRESETS: RolePreset[] = [
     roles: ['werewolf', 'werewolf', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
   },
   {
+    name: '9人狼王局',
+    playerCount: 9,
+    roles: ['werewolf', 'werewolf', 'wolf_king', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
+  },
+  {
+    name: '9人白狼王局',
+    playerCount: 9,
+    roles: ['werewolf', 'werewolf', 'white_wolf_king', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
+  },
+  {
     name: '10人豪华局',
     playerCount: 10,
     roles: [
       'werewolf', 'werewolf', 'wolf_king',
+      'seer', 'witch', 'hunter', 'guard', 'idiot', 'villager', 'villager',
+    ],
+  },
+  {
+    name: '10人狼美人局',
+    playerCount: 10,
+    roles: [
+      'werewolf', 'white_wolf_king', 'wolf_beauty',
       'seer', 'witch', 'hunter', 'guard', 'idiot', 'villager', 'villager',
     ],
   },

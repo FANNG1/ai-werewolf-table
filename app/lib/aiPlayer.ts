@@ -29,9 +29,37 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
     priv.push(`你的查验记录：${checks.length ? checks.join('；') : '暂无'}`)
   }
   if (player.role === 'witch') {
+    const killInfos = state.nightActions
+      .filter((a) => a.actionType === 'kill' && a.targetId)
+      .map((a) => {
+        const t = state.players.find((p) => p.id === a.targetId)
+        return t ? `第${a.round}晚刀口 ${t.name}` : ''
+      })
+      .filter(Boolean)
+    const heals = state.nightActions
+      .filter((a) => a.actorId === player.id && a.actionType === 'heal' && a.targetId)
+      .map((a) => {
+        const t = state.players.find((p) => p.id === a.targetId)
+        return t ? `第${a.round}晚用解药救了 ${t.name}（你的银水/刀口信息）` : ''
+      })
+      .filter(Boolean)
+    const poisons = state.nightActions
+      .filter((a) => a.actorId === player.id && a.actionType === 'poison' && a.targetId)
+      .map((a) => {
+        const t = state.players.find((p) => p.id === a.targetId)
+        return t ? `第${a.round}晚用毒药毒了 ${t.name}` : ''
+      })
+      .filter(Boolean)
     priv.push(
       `你的药剂：解药${state.witchPotions.heal ? '【可用】' : '【已用完】'}，毒药${state.witchPotions.poison ? '【可用】' : '【已用完】'}`
     )
+    if (killInfos.length > 0) priv.push(`你看到的狼人刀口：${killInfos.join('；')}`)
+    if (heals.length > 0) {
+      priv.push(
+        `你的救人记录：${heals.join('；')}。这是你的私密强信息；隐藏女巫身份时不要直接报银水，但判断发言/站边时要提高被救者可信度。`
+      )
+    }
+    if (poisons.length > 0) priv.push(`你的毒药记录：${poisons.join('；')}`)
   }
   if (player.role === 'guard') {
     const guards = state.nightActions
@@ -224,6 +252,19 @@ function getRoleStrategy(role: Role): string {
 	- 不要随意开枪带走疑似狼同伴。
 	- 公开发言和遗言都不能泄露真实狼队信息：不要承认真实狼身份，不要说某人是你的狼同伴，不要真心帮好人盘狼坑。
 	- 狼人胜利条件是屠边：杀光所有神职或所有平民。`
+    case 'white_wolf_king':
+      return `你的白狼王策略：
+		- 白天按狼人打法伪装，不要轻易暴露身份。
+		- 你可以在白天自爆并带走一名玩家；只有在被查杀、即将被放逐、能带走可信神职/强好人、或自爆能接近屠边时才使用。
+		- 自爆目标优先可信预言家、女巫、守卫、猎人或强势带队好人，避免带走狼同伴。
+		- 不自爆时继续伪装成好人，制造错误焦点。
+		- 公开发言和遗言都不能泄露真实狼队信息。`
+    case 'wolf_beauty':
+      return `你的狼美人策略：
+		- 夜晚魅惑一名非狼人；你死亡时最近被魅惑且仍存活的玩家会殉情。
+		- 魅惑目标优先可信神职、强好人、能带队的人，或白天可能推动你出局的人。
+		- 白天尽量深水伪装，不要暴露狼美人身份；被怀疑时用好人视角解释。
+		- 狼人胜利条件是屠边，魅惑应服务于带走关键神职或强民。`
     case 'seer':
       return `你的预言家策略：
 - 查验结果是你的核心信息。发言时要围绕验人结果、发言矛盾和投票行为建立逻辑链。
@@ -317,6 +358,15 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 
+function shuffleCopy<T>(arr: T[]): T[] {
+  const out = [...arr]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
+
 // ───────────────────────── 通用 AI 调用 ─────────────────────────
 async function callAi(
   instruction: string,
@@ -336,17 +386,25 @@ async function callAiWithTrace(
   json = false,
   maxTokens?: number
 ): Promise<{ content: string; trace: AiRequestTrace }> {
-  const resp = await fetch('/api/ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ instruction, perspective, task, json, maxTokens }),
-  })
-  if (!resp.ok) throw new Error('AI 调用失败')
-  const data = await resp.json()
-  const content = (data.content as string) || ''
-  return {
-    content,
-    trace: { instruction, perspective, task, json, maxTokens, rawResponse: content },
+  // 超时保护：挂住的请求会被中断并抛错，由各决策函数的 try/catch 落到兜底，避免整局永久卡在 aiThinking。
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 45000)
+  try {
+    const resp = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction, perspective, task, json, maxTokens }),
+      signal: controller.signal,
+    })
+    if (!resp.ok) throw new Error('AI 调用失败')
+    const data = await resp.json()
+    const content = (data.content as string) || ''
+    return {
+      content,
+      trace: { instruction, perspective, task, json, maxTokens, rawResponse: content },
+    }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -409,18 +467,25 @@ export interface AiTargetDecision {
 function matchPlayerByName(name: string, candidates: Player[]): Player | undefined {
   const n = (name || '').trim()
   if (!n) return undefined
-  return candidates.find((c) => n.includes(c.name) || c.name.includes(n))
+
+  const exact = candidates.find((c) => c.name === n)
+  if (exact) return exact
+
+  // Prefer longer names first so "玩家10" never gets matched as "玩家1".
+  return [...candidates]
+    .sort((a, b) => b.name.length - a.name.length)
+    .find((c) => n.includes(c.name) || c.name.includes(n))
 }
 
 function sanitizeDecisionReason(reason: unknown, state: GameState): string {
   let text = typeof reason === 'string' && reason.trim() ? reason.trim() : 'AI 未给出明确理由'
   const hasPublicSpeech = state.speeches.length > 0
   const hasPublicVote = state.votes.length > 0
-  if (!hasPublicSpeech && /(发言|逻辑矛盾|站边|表水|带节奏|跳身份|悍跳|对跳)/.test(text)) {
-    return '当前还没有公开发言记录，属于首夜信息不足下的覆盖式选择'
+  if (!hasPublicSpeech && /(发言矛盾|逻辑矛盾|表水|带节奏|悍跳|对跳|他跳|她跳|有人跳)/.test(text)) {
+    return '当前还没有公开发言记录，属于信息不足下的覆盖式选择'
   }
-  if (!hasPublicVote && /(票型|投票|跟票|冲票|归票|分票)/.test(text)) {
-    return '当前还没有公开票型记录，不能依据投票判断，属于信息不足下的选择'
+  if (!hasPublicVote && /(票型|跟票|冲票|分票)/.test(text)) {
+    return '当前还没有公开票型记录，不能依据票型判断，属于信息不足下的选择'
   }
   if (/(警长|警徽|上警|退水|警下)/.test(text)) {
     text = text.replace(/警长|警徽流|警徽|上警|退水|警下/g, '当前发言与票型')
@@ -486,11 +551,11 @@ function validateSpeechAgainstStrategy(
 function validateCommonSenseText(text: string, state: GameState): string | null {
   const hasPublicSpeech = state.speeches.length > 0
   const hasPublicVote = state.votes.length > 0
-  if (!hasPublicSpeech && /(发言|逻辑矛盾|站边|表水|带节奏|跳身份|悍跳|对跳)/.test(text)) {
-    return '当前还没有公开发言记录，不能引用发言矛盾、站边、带节奏、跳身份等不存在的信息。'
+  if (!hasPublicSpeech && /(发言矛盾|逻辑矛盾|表水|带节奏|悍跳|对跳|他跳|她跳|有人跳)/.test(text)) {
+    return '当前还没有公开发言记录，不能引用发言矛盾、表水、带节奏、悍跳、对跳等不存在的信息。'
   }
-  if (!hasPublicVote && /(票型|投票|跟票|冲票|归票|分票)/.test(text)) {
-    return '当前还没有公开投票记录，不能引用票型、跟票、冲票、归票等不存在的信息。'
+  if (!hasPublicVote && /(票型|跟票|冲票|分票)/.test(text)) {
+    return '当前还没有公开投票记录，不能引用票型、跟票、冲票、分票等不存在的信息。'
   }
   if (/(警长|警徽|上警|退水|警下)/.test(text)) {
     return '本局没有警长、警徽、上警、退水、警下机制，不能提及这些概念。'
@@ -522,14 +587,26 @@ function validateWerewolfPublicSpeech(speech: string, player: Player, state: Gam
 
 function fallbackPublicSpeech(state: GameState, isLastWords = false): string {
   const hasVotes = state.votes.some((v) => v.round === state.round)
+  const hasRoundSpeech = state.speeches.some((s) => s.round === state.round)
+  const hasPriorSpeech = state.speeches.some((s) => s.round < state.round)
+
   if (isLastWords) {
     return hasVotes
-      ? '我最后留一句：别被现在的票型带着走，回头盘谁借我的出局做身份、谁一直在顺风推人。重点看那些站边太轻松的人。'
-      : '我最后留一句：别只看单点发言，回头盘谁一直在顺风推人、谁的怀疑没有依据。重点看那些站边太轻松的人。'
+      ? '我最后留一下视角：这轮票型里有顺势推人的位置，大家回头看谁的理由最薄、谁借我的出局做身份。'
+      : '我最后留一下视角：别只看单点结论，重点回头盘谁的怀疑有没有事实依据、谁的立场前后不一致。'
   }
-  return hasVotes
-    ? '我这轮不认这个逻辑，场上还有人在借票型带节奏。别只盯着我，回头看谁一直顺着风向推人，那里更像有问题。'
-    : '我这轮先不认这个逻辑。现在信息还不够，重点看谁的怀疑没有依据、谁一直顺着风向推人，那里更像有问题。'
+
+  if (hasVotes) {
+    return '我先给个倾向：现在票型已经起来了，但不能只看谁票多，还得看投票理由是否站得住。'
+  }
+
+  if (!hasRoundSpeech) {
+    return hasPriorSpeech
+      ? '我先开个头：结合前面几轮的信息和昨晚死亡情况，这轮重点看谁的立场前后不一致、谁借刀口强行带方向。'
+      : '我先开个头：第一轮信息还少，我不急着定死谁，先看后面谁的发言有依据、谁在没有证据时强推人。'
+  }
+
+  return '我先给个倾向：现在信息还不多，先看谁的怀疑有事实支撑，谁只是在跟着已有说法下结论。'
 }
 
 // ───────────────────────── 发言 ─────────────────────────
@@ -1001,15 +1078,16 @@ export async function decideWerewolfKill(
 
   const leader = wolves[0]
   const wolfNames = wolves.map((w) => w.name).join('、')
+  const displayedCandidates = shuffleCopy(candidates)
   const hasPublicSpeech = state.speeches.length > 0
   const hasPublicVote = state.votes.length > 0
   const evidenceNote = `公开信息约束：${
     hasPublicSpeech ? '场上已有公开发言，可以引用真实发言内容。' : '目前还没有任何公开发言，理由里绝不能说某人“发言像神、带队、跳身份、逻辑矛盾”。'
   }${
     hasPublicVote ? '场上已有投票记录，可以引用真实票型。' : '目前还没有任何投票记录，理由里绝不能引用票型、跟票、冲票或归票。'
-  }如果信息不足，请直接说明“首夜/信息不足下的刀法选择”，不要编造不存在的依据。`
+  }如果信息不足，请直接说明“首夜/信息不足下的刀法选择”，不要编造不存在的依据；不要因为某人排在列表前面或叫“玩家1”就默认选择他。`
   const task = `现在是狼人夜晚协商阶段。存活狼队成员：${wolfNames}。
-可击杀目标：${candidates.map((c) => c.name).join('、')}。
+可击杀目标：${displayedCandidates.map((c) => c.name).join('、')}。
 请代表狼队选择今晚击杀目标。目标是推进屠边胜利：可以优先刀可信神职，也可以在平民较少时转向屠民。
 判断时要结合白天发言、疑似身份、谁在带队、谁可能是预言家/女巫/守卫/猎人、以及击杀后是否接近屠神或屠民。
 ${evidenceNote}
@@ -1078,6 +1156,74 @@ ${evidenceNote}
     // 兜底：第一晚有人被刀就救，其余不动
     return { heal: canHeal && state.round === 1, poisonTargetId: null, reason: canHeal && state.round === 1 ? 'AI 输出无效，首夜有人被刀按兜底使用解药' : 'AI 输出无效，女巫选择不用药兜底' }
   }
+}
+
+export async function decideWolfBeautyCharm(
+  wolfBeauty: Player,
+  state: GameState,
+  candidates: Player[]
+): Promise<AiTargetDecision> {
+  if (candidates.length === 0) return { targetId: null, reason: '没有可魅惑目标' }
+  const displayedCandidates = shuffleCopy(candidates)
+  const task = `现在是夜晚，你是狼美人，请选择今晚魅惑的一名非狼人玩家。
+如果你之后死亡，最近被魅惑且仍存活的玩家会殉情出局。
+可选目标：${displayedCandidates.map((c) => c.name).join('、')}。
+优先魅惑可信预言家、女巫、守卫、猎人、强势好人、或白天可能推动你出局的人；不要因为列表顺序默认选择玩家1。
+返回 JSON：{"target":"玩家名字","reason":"简短理由"}`
+
+  try {
+    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(wolfBeauty), buildPlayerPerspective(wolfBeauty, state), task)
+    const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
+    if (matched) {
+      return { targetId: matched.id, reason: sanitizeDecisionReason(parsed.reason, state), llmTrace: trace }
+    }
+  } catch {
+    // fall through to heuristic
+  }
+
+  const claimed = findClaimedSeers(state)
+  const priority = candidates.filter((c) => claimed.includes(c.id))
+  return { targetId: (priority[0] ?? pickRandom(candidates)).id, reason: priority.length > 0 ? 'AI 输出无效，兜底魅惑疑似预言家' : 'AI 输出无效，随机选择魅惑目标兜底' }
+}
+
+export async function decideWhiteWolfKingExplosion(
+  whiteWolf: Player,
+  state: GameState,
+  candidates: Player[]
+): Promise<AiTargetDecision & { explode: boolean }> {
+  if (candidates.length === 0) return { explode: false, targetId: null, reason: '没有可自爆目标' }
+  const wolfIds = new Set(state.players.filter((p) => isWerewolf(p.role)).map((p) => p.id))
+  const claimedByRealSeer = state.publicClaims.some(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === whiteWolf.id && !wolfIds.has(c.claimantId)
+  )
+  const aliveWolves = state.players.filter((p) => p.isAlive && isWerewolf(p.role)).length
+  const aliveVillagers = state.players.filter((p) => p.isAlive && !isWerewolf(p.role)).length
+  const urgency = claimedByRealSeer || aliveWolves <= 1 || aliveVillagers <= aliveWolves + 2
+  if (!urgency) return { explode: false, targetId: null, reason: '当前没有必须自爆的硬局势，继续伪装发言' }
+
+  const displayedCandidates = shuffleCopy(candidates)
+  const task = `现在是白天讨论阶段，你是白狼王，可以选择是否自爆并带走一名玩家。
+当前局势${claimedByRealSeer ? '：你已被真预言家查杀，身份压力很高。' : '：需要判断自爆是否能换掉关键好人。'}
+可带走目标：${displayedCandidates.map((c) => c.name).join('、')}。
+只有当自爆能明显服务狼队时才爆；目标优先可信预言家、女巫、守卫、猎人或强势带队好人，避免带走狼同伴。
+返回 JSON：{"explode": true或false, "target":"玩家名字或null", "reason":"简短理由"}`
+
+  try {
+    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(whiteWolf), buildPlayerPerspective(whiteWolf, state), task)
+    if (parsed.explode !== true) return { explode: false, targetId: null, reason: sanitizeDecisionReason(parsed.reason, state), llmTrace: trace }
+    const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
+    if (matched) return { explode: true, targetId: matched.id, reason: sanitizeDecisionReason(parsed.reason, state), llmTrace: trace }
+  } catch {
+    // fall through to heuristic
+  }
+
+  if (claimedByRealSeer) {
+    const seerClaim = state.publicClaims.find((c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === whiteWolf.id && !wolfIds.has(c.claimantId))
+    if (seerClaim && candidates.some((c) => c.id === seerClaim.claimantId)) {
+      return { explode: true, targetId: seerClaim.claimantId, reason: '被真预言家查杀，兜底自爆带走预言家' }
+    }
+  }
+  return { explode: false, targetId: null, reason: 'AI 输出无效，且没有明确自爆收益，继续发言' }
 }
 
 // ───────────────────────── 猎人 / 狼王开枪 ─────────────────────────

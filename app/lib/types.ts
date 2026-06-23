@@ -1,6 +1,8 @@
 export type Role =
   | 'werewolf'
   | 'wolf_king'
+  | 'white_wolf_king'
+  | 'wolf_beauty'
   | 'villager'
   | 'seer'
   | 'witch'
@@ -14,6 +16,7 @@ export type Phase =
   | 'setup'
   | 'night_guard'
   | 'night_werewolf'
+  | 'night_wolf_beauty'
   | 'night_seer'
   | 'night_witch'
   | 'day_announce'
@@ -41,7 +44,7 @@ export interface NightAction {
   round: number
   actorId: string
   targetId: string | null
-  actionType: 'kill' | 'check' | 'heal' | 'poison' | 'protect' | 'shoot'
+  actionType: 'kill' | 'check' | 'heal' | 'poison' | 'protect' | 'shoot' | 'charm' | 'explode' | 'lovers_death'
   reason?: string
   llmTrace?: AiRequestTrace
 }
@@ -130,6 +133,7 @@ export interface GameState {
   nightDeaths: string[]
   pendingHunter: string | null
   pendingShotSource: 'night' | 'vote' | null
+  pendingExplode: string | null
   pendingLastWords: string | null
   pendingLastWordsSource: 'night' | 'vote' | 'shot' | null
   wolfPlan: WolfPlan | null

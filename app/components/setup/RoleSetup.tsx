@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { ROLE_DESCRIPTIONS, ROLE_EMOJIS, ROLE_NAMES, ROLE_PRESETS, ROLE_TEAMS } from '../../lib/roles'
 import type { Role } from '../../lib/types'
 
-const ALL_ROLES: Role[] = ['werewolf', 'wolf_king', 'villager', 'seer', 'witch', 'hunter', 'guard', 'idiot']
+const ALL_ROLES: Role[] = ['werewolf', 'wolf_king', 'white_wolf_king', 'wolf_beauty', 'villager', 'seer', 'witch', 'hunter', 'guard', 'idiot']
 
 interface Props {
   playerCount: number

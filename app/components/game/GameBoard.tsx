@@ -17,6 +17,7 @@ interface Props {
   onVote: (targetId: string) => void
   onSubmitVote: () => void
   onHunterShoot: (targetId: string | null) => void
+  onWhiteWolfKingExplode: (actorId: string, targetId: string) => void
   triggerAiHunterShoot: (state: GameState) => void
   onNightAction: (targetId: string | null, actionType: string) => void
   onSkipNight: () => void
@@ -37,6 +38,7 @@ export function GameBoard({
   onVote,
   onSubmitVote,
   onHunterShoot,
+  onWhiteWolfKingExplode,
   triggerAiHunterShoot,
   onNightAction,
   onSkipNight,
@@ -127,7 +129,7 @@ export function GameBoard({
     )
   }
 
-  const isNightPhase = ['night_guard', 'night_werewolf', 'night_seer', 'night_witch'].includes(phase)
+  const isNightPhase = ['night_guard', 'night_werewolf', 'night_wolf_beauty', 'night_seer', 'night_witch'].includes(phase)
   const isDayPhase = ['day_announce', 'day_discuss', 'day_vote', 'day_last_words', 'hunter_shoot'].includes(phase)
 
   return (
@@ -177,6 +179,7 @@ export function GameBoard({
             onVote={onVote}
             onSubmitVote={onSubmitVote}
             onHunterShoot={onHunterShoot}
+            onWhiteWolfKingExplode={onWhiteWolfKingExplode}
             onSubmitLastWords={onSubmitLastWords}
             onProceedLastWords={onProceedLastWords}
           />

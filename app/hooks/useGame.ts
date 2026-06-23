@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import { decideNightAction, decideShotTarget, decideWerewolfKill, decideWitchAction, generateAiSpeech, generateAiVote, generateLastWords, generateWolfPlan } from '../lib/aiPlayer'
+import { decideNightAction, decideShotTarget, decideWerewolfKill, decideWitchAction, decideWhiteWolfKingExplosion, decideWolfBeautyCharm, generateAiSpeech, generateAiVote, generateLastWords, generateWolfPlan } from '../lib/aiPlayer'
 import type { RawClaim } from '../lib/aiPlayer'
 import {
   checkWinCondition,
@@ -10,6 +10,7 @@ import {
   initGame,
   nextNightPhase,
   processHunterShoot,
+  processWhiteWolfKingExplode,
   processLastWordsEnd,
   processNightEnd,
   processVote,
@@ -29,7 +30,7 @@ function getCheckedIds(state: GameState, seerId: string): Array<string | null> {
 
 function getInitialSpeakerIndex(state: GameState): number {
   const aliveCount = state.players.filter((p) => p.isAlive).length
-  return aliveCount > 0 ? (state.round - 1) % aliveCount : 0
+  return aliveCount > 0 ? Math.floor(Math.random() * aliveCount) : 0
 }
 
 function getEligibleVoters(state: GameState) {
@@ -214,6 +215,16 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
       )
     )
   }
+  const wolfBeauty = s.players.find((p) => p.isAlive && p.role === 'wolf_beauty' && !p.isHuman)
+  if (wolfBeauty) {
+    const cands = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+    tasks.push(
+      decideWolfBeautyCharm(wolfBeauty, s, cands).then((d) =>
+        d.targetId ? ({ round: s.round, actorId: wolfBeauty.id, targetId: d.targetId, actionType: 'charm', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
+      )
+    )
+  }
+
   const seer = s.players.find((p) => p.isAlive && p.role === 'seer' && !p.isHuman)
   if (seer) {
     const checkedIds = getCheckedIds(s, seer.id)
@@ -450,6 +461,24 @@ export function useGame() {
                   s = await maybeGenerateWolfPlan(s)
                 }
                 s = advanceNightOrResolve(s, 'night_werewolf')
+              } else if (phase === 'night_wolf_beauty') {
+                const wolfBeauty = s.players.find((p) => p.isAlive && p.role === 'wolf_beauty' && !p.isHuman)
+                const alreadyCharmed = s.nightActions.some(
+                  (a) => a.round === s.round && a.actionType === 'charm' && a.actorId === wolfBeauty?.id
+                )
+                if (wolfBeauty && !alreadyCharmed) {
+                  const candidates = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+                  const decision = await decideWolfBeautyCharm(wolfBeauty, s, candidates)
+                  if (decision.targetId) {
+                    const action: NightAction = { round: s.round, actorId: wolfBeauty.id, targetId: decision.targetId, actionType: 'charm', reason: decision.reason, llmTrace: decision.llmTrace }
+                    s = {
+                      ...s,
+                      nightActions: [...s.nightActions, action],
+                      logs: [...s.logs, logNightAction(action, 'night_wolf_beauty')],
+                    }
+                  }
+                }
+                s = advanceNightOrResolve(s, 'night_wolf_beauty')
               } else if (phase === 'night_seer') {
                 const seer = s.players.find((p) => p.isAlive && p.role === 'seer' && !p.isHuman)
                 if (seer) {
@@ -548,6 +577,16 @@ export function useGame() {
           if (player.isHuman) {
             setState((prev) => prev ? { ...prev, currentSpeakerIndex: index } : prev)
             return
+          }
+
+          if (player.role === 'white_wolf_king') {
+            const candidates = localState.players.filter((p) => p.isAlive && p.id !== player.id)
+            const explosion = await decideWhiteWolfKingExplosion(player, localState, candidates)
+            if (explosion.explode && explosion.targetId) {
+              const nextState = processWhiteWolfKingExplode(localState, player.id, explosion.targetId)
+              setState(nextState)
+              return
+            }
           }
 
           const { content, claims, llmTrace } = await generateAiSpeech(player, localState)
@@ -712,7 +751,12 @@ export function useGame() {
           const spokenLW = new Set(
             prev.speeches.filter((s) => s.isLastWords && s.round === prev.round).map((s) => s.playerId)
           )
-          const next = prev.nightDeaths.find((id) => !spokenLW.has(id))
+          const loverDeaths = new Set(
+            prev.logs
+              .filter((l) => l.round === prev.round && l.type === 'death' && l.data.reason === 'wolf_beauty_lovers_death')
+              .map((l) => l.data.playerId as string)
+          )
+          const next = prev.nightDeaths.find((id) => !spokenLW.has(id) && !loverDeaths.has(id))
           if (next) {
             return { ...prev, phase: 'day_last_words', pendingLastWords: next }
           }
@@ -849,6 +893,13 @@ export function useGame() {
     })
   }, [])
 
+  const submitWhiteWolfKingExplode = useCallback((actorId: string, targetId: string) => {
+    setState((prev) => {
+      if (!prev) return prev
+      return processWhiteWolfKingExplode(prev, actorId, targetId)
+    })
+  }, [])
+
   const startReview = useCallback(() => {
     setState((prev) => prev ? { ...prev, phase: 'review' } : prev)
   }, [])
@@ -869,6 +920,7 @@ export function useGame() {
     finishDiscussion,
     submitVoteAndProcess,
     submitHunterShoot,
+    submitWhiteWolfKingExplode,
     triggerAiHunterShoot,
     triggerAiLastWords,
     proceedAfterLastWords,

@@ -13,6 +13,7 @@ interface Props {
   onVote: (targetId: string) => void
   onSubmitVote: () => void
   onHunterShoot: (targetId: string | null) => void
+  onWhiteWolfKingExplode: (actorId: string, targetId: string) => void
   onSubmitLastWords: (content: string | null) => void
   onProceedLastWords: () => void
 }
@@ -25,6 +26,7 @@ export function DayPhase({
   onVote,
   onSubmitVote,
   onHunterShoot,
+  onWhiteWolfKingExplode,
   onSubmitLastWords,
   onProceedLastWords,
 }: Props) {
@@ -33,6 +35,7 @@ export function DayPhase({
   const [humanLastWords, setHumanLastWords] = useState('')
   const [humanShootTarget, setHumanShootTarget] = useState<string | null>(null)
   const [humanVoteTarget, setHumanVoteTarget] = useState<string | null>(null)
+  const [explodeTarget, setExplodeTarget] = useState<string | null>(null)
   const speechEndRef = useRef<HTMLDivElement>(null)
 
   const alivePlayers = players.filter((p) => p.isAlive)
@@ -52,6 +55,7 @@ export function DayPhase({
     currentSpeaker?.id === humanPlayer.id &&
     !humanHasSpoken
   const canProceedToVote = !aiThinking && allAlivePlayersSpoken
+  const humanCanExplode = humanCanSpeak && humanPlayer?.role === 'white_wolf_king'
 
   useEffect(() => {
     speechEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -275,6 +279,31 @@ export function DayPhase({
           {humanCanSpeak && (
             <div className="p-4 bg-gray-800">
               <p className="text-xs text-blue-400 font-semibold mb-2">💬 轮到你发言了</p>
+              {humanCanExplode && (
+                <div className="mb-3 rounded-lg border border-red-800 bg-red-950/40 p-3">
+                  <p className="text-xs text-red-300 font-semibold mb-2">白狼王自爆带人</p>
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    {alivePlayers.filter((p) => p.id !== humanPlayer?.id).map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => setExplodeTarget(explodeTarget === p.id ? null : p.id)}
+                        className={`rounded-lg border px-2 py-2 text-xs ${explodeTarget === p.id ? 'border-red-400 bg-red-900 text-white' : 'border-gray-700 bg-gray-900 text-gray-300'}`}
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (humanPlayer && explodeTarget) onWhiteWolfKingExplode(humanPlayer.id, explodeTarget)
+                    }}
+                    disabled={!explodeTarget}
+                    className="w-full rounded-lg bg-red-700 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                  >
+                    自爆并带走 {explodeTarget ? players.find((p) => p.id === explodeTarget)?.name : '...'}
+                  </button>
+                </div>
+              )}
               <div className="flex gap-2">
                 <textarea
                   value={humanSpeech}

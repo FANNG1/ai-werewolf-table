@@ -58,6 +58,7 @@ export function initGame(config: GameConfig): GameState {
     nightDeaths: [],
     pendingHunter: null,
     pendingShotSource: null,
+    pendingExplode: null,
     pendingLastWords: null,
     pendingLastWordsSource: null,
     wolfPlan: null,
@@ -85,6 +86,49 @@ export function getAliveVillagers(state: GameState): Player[] {
   return state.players.filter((p) => p.isAlive && !isWerewolf(p.role))
 }
 
+
+function applyWolfBeautyLoversDeath(
+  state: GameState,
+  deadIds: string[],
+  phase: Phase,
+  addToNightDeaths = false
+): GameState {
+  const deadSet = new Set(deadIds)
+  const deadBeauties = state.players.filter((p) => deadSet.has(p.id) && p.role === 'wolf_beauty')
+  if (deadBeauties.length === 0) return state
+
+  let next = state
+  for (const beauty of deadBeauties) {
+    const charm = [...next.nightActions]
+      .reverse()
+      .find((a) => a.actorId === beauty.id && a.actionType === 'charm' && a.targetId)
+    if (!charm?.targetId) continue
+    const lover = next.players.find((p) => p.id === charm.targetId)
+    if (!lover || !lover.isAlive) continue
+
+    next = {
+      ...next,
+      players: next.players.map((p) => (p.id === lover.id ? { ...p, isAlive: false } : p)),
+      nightDeaths:
+        addToNightDeaths && !next.nightDeaths.includes(lover.id)
+          ? [...next.nightDeaths, lover.id]
+          : next.nightDeaths,
+      logs: [
+        ...next.logs,
+        {
+          id: genId(),
+          type: 'death' as const,
+          round: next.round,
+          phase,
+          data: { playerId: lover.id, role: lover.role, reason: 'wolf_beauty_lovers_death', wolfBeautyId: beauty.id },
+          timestamp: Date.now(),
+        },
+      ],
+    }
+  }
+  return next
+}
+
 export function checkWinCondition(state: GameState): 'werewolves' | 'villagers' | null {
   // 好人胜利：所有狼人出局
   if (getAliveWerewolves(state).length === 0) return 'villagers'
@@ -105,11 +149,12 @@ export function checkWinCondition(state: GameState): 'werewolves' | 'villagers' 
 
 // Returns the next phase after current night sub-phase, skipping roles not in game
 export function nextNightPhase(state: GameState, current: Phase): Phase {
-  const order: Phase[] = ['night_guard', 'night_werewolf', 'night_seer', 'night_witch']
+  const order: Phase[] = ['night_guard', 'night_werewolf', 'night_wolf_beauty', 'night_seer', 'night_witch']
   const idx = order.indexOf(current)
   for (let i = idx + 1; i < order.length; i++) {
     const next = order[i]
     if (next === 'night_guard' && !hasRole(state, 'guard')) continue
+    if (next === 'night_wolf_beauty' && !hasRole(state, 'wolf_beauty')) continue
     if (next === 'night_seer' && !hasRole(state, 'seer')) continue
     if (next === 'night_witch' && !hasRole(state, 'witch')) continue
     return next
@@ -171,7 +216,7 @@ export function processNightEnd(state: GameState): GameState {
     },
   ]
 
-  const newState: GameState = {
+  let newState: GameState = {
     ...state,
     players: newPlayers,
     nightDeaths,
@@ -179,10 +224,12 @@ export function processNightEnd(state: GameState): GameState {
     phase: 'day_announce',
     pendingHunter: null,
     pendingShotSource: null,
+    pendingExplode: null,
     pendingLastWords: null,
     pendingLastWordsSource: null,
   }
 
+  newState = applyWolfBeautyLoversDeath(newState, nightDeaths, 'day_announce', true)
   const win = checkWinCondition(newState)
   if (win) return { ...newState, winner: win, phase: 'game_over' }
 
@@ -211,7 +258,7 @@ export function processNightEnd(state: GameState): GameState {
 // day_discuss 的起始发言者（与 useGame.getInitialSpeakerIndex 一致）
 function initialSpeakerIndex(state: GameState): number {
   const aliveCount = state.players.filter((p) => p.isAlive).length
-  return aliveCount > 0 ? (state.round - 1) % aliveCount : 0
+  return aliveCount > 0 ? Math.floor(Math.random() * aliveCount) : 0
 }
 
 export function processVote(state: GameState): GameState {
@@ -317,7 +364,7 @@ export function processVote(state: GameState): GameState {
       ? votedOut
       : null
 
-  const newState: GameState = {
+  let newState: GameState = {
     ...state,
     players: newPlayers,
     logs: newLogs,
@@ -329,6 +376,10 @@ export function processVote(state: GameState): GameState {
     currentSpeakerIndex: 0,
     currentVoterIndex: 0,
   }
+
+  newState = applyWolfBeautyLoversDeath(newState, [votedOut], 'day_vote')
+  const loverWin = checkWinCondition(newState)
+  if (loverWin) return { ...newState, winner: loverWin, phase: 'game_over', pendingHunter: null, pendingShotSource: null, pendingLastWords: null, pendingLastWordsSource: null }
 
   // 被放逐者先发表遗言，遗言结束后再处理开枪 / 胜负 / 进入黑夜
   return { ...newState, phase: 'day_last_words' }
@@ -344,7 +395,12 @@ export function processLastWordsEnd(state: GameState): GameState {
     const spokenLW = new Set(
       state.speeches.filter((s) => s.isLastWords && s.round === state.round).map((s) => s.playerId)
     )
-    const next = state.nightDeaths.find((id) => !spokenLW.has(id))
+    const loverDeaths = new Set(
+      state.logs
+        .filter((l) => l.round === state.round && l.type === 'death' && l.data.reason === 'wolf_beauty_lovers_death')
+        .map((l) => l.data.playerId as string)
+    )
+    const next = state.nightDeaths.find((id) => !spokenLW.has(id) && !loverDeaths.has(id))
     if (next) {
       return { ...state, phase: 'day_last_words', pendingLastWords: next, pendingLastWordsSource: 'night' }
     }
@@ -428,13 +484,14 @@ export function processHunterShoot(state: GameState, targetId: string | null): G
       ? [...state.nightDeaths, targetId]
       : state.nightDeaths
   // 开枪已完成，清空 pendingHunter；但保留 pendingShotSource，供被枪杀者遗言结束后路由
-  const shotState: GameState = {
+  let shotState: GameState = {
     ...state,
     players: newPlayers,
     logs: newLogs,
     nightDeaths,
     pendingHunter: null,
   }
+  shotState = applyWolfBeautyLoversDeath(shotState, [targetId], 'hunter_shoot', source === 'night')
 
   // 若这一枪直接结束游戏，则不再发表遗言
   const win = checkWinCondition(shotState)
@@ -449,4 +506,45 @@ export function processHunterShoot(state: GameState, targetId: string | null): G
     pendingLastWords: targetId,
     pendingLastWordsSource: 'shot',
   }
+}
+
+export function processWhiteWolfKingExplode(state: GameState, actorId: string, targetId: string): GameState {
+  const actor = state.players.find((p) => p.id === actorId)
+  const target = state.players.find((p) => p.id === targetId)
+  if (!actor || !target || actor.role !== 'white_wolf_king' || !actor.isAlive || !target.isAlive || actor.id === target.id) {
+    return state
+  }
+
+  const newPlayers = state.players.map((p) => {
+    if (p.id === actor.id) return { ...p, isAlive: false, isRoleRevealed: true }
+    if (p.id === target.id) return { ...p, isAlive: false }
+    return p
+  })
+  let next: GameState = {
+    ...state,
+    players: newPlayers,
+    logs: [
+      ...state.logs,
+      {
+        id: genId(),
+        type: 'action' as const,
+        round: state.round,
+        phase: 'day_discuss' as Phase,
+        data: { action: 'white_wolf_king_explode', actorId: actor.id, targetId: target.id },
+        timestamp: Date.now(),
+      },
+    ],
+    pendingHunter: null,
+    pendingShotSource: null,
+    pendingExplode: null,
+    pendingLastWords: null,
+    pendingLastWordsSource: null,
+    currentSpeakerIndex: 0,
+    currentVoterIndex: 0,
+  }
+
+  next = applyWolfBeautyLoversDeath(next, [actor.id, target.id], 'day_discuss')
+  const win = checkWinCondition(next)
+  if (win) return { ...next, winner: win, phase: 'game_over' }
+  return { ...next, phase: 'night_guard', round: state.round + 1 }
 }

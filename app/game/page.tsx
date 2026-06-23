@@ -10,7 +10,7 @@ import type { GameConfig } from '../lib/types'
 function GamePageInner() {
   const searchParams = useSearchParams()
   const { state, aiThinking, startGame, addSpeech, addVote, submitNightAction, skipNightAction,
-    finishDiscussion, submitVoteAndProcess, submitHunterShoot, startReview,
+    finishDiscussion, submitVoteAndProcess, submitHunterShoot, submitWhiteWolfKingExplode, startReview,
     triggerNightAi, triggerAiSpeeches, triggerAiVotes, triggerAiHunterShoot,
     triggerAiLastWords, proceedAfterLastWords, submitHumanLastWords } = useGame()
   const [loaded, setLoaded] = useState(false)
@@ -65,6 +65,7 @@ function GamePageInner() {
       }}
       onSubmitVote={submitVoteAndProcess}
       onHunterShoot={submitHunterShoot}
+      onWhiteWolfKingExplode={submitWhiteWolfKingExplode}
       triggerAiHunterShoot={triggerAiHunterShoot}
       onNightAction={(targetId, actionType) =>
         submitNightAction(

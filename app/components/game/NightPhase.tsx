@@ -29,6 +29,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
     if (!humanPlayer) return false
     if (phase === 'night_guard') return humanPlayer.role === 'guard'
     if (phase === 'night_werewolf') return isWerewolf(humanPlayer.role)
+    if (phase === 'night_wolf_beauty') return humanPlayer.role === 'wolf_beauty'
     if (phase === 'night_seer') return humanPlayer.role === 'seer'
     if (phase === 'night_witch') return humanPlayer.role === 'witch'
     return false
@@ -77,6 +78,9 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
     if (phase === 'night_werewolf') {
       return alivePlayers.filter((p) => !isWerewolf(p.role))
     }
+    if (phase === 'night_wolf_beauty') {
+      return alivePlayers.filter((p) => !isWerewolf(p.role))
+    }
     if (phase === 'night_guard') {
       return alivePlayers.filter((p) => p.id !== guardLastProtect)
     }
@@ -119,6 +123,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
   const getPhaseDesc = (): string => {
     if (phase === 'night_guard') return '守卫：选择今晚守护的玩家'
     if (phase === 'night_werewolf') return '狼人：选择今晚击杀的目标'
+    if (phase === 'night_wolf_beauty') return '狼美人：选择今晚魅惑的目标'
     if (phase === 'night_seer') return '预言家：选择今晚查验的玩家'
     if (phase === 'night_witch') return '女巫：使用你的药水'
     return ''
@@ -143,6 +148,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
     const actionMap: Record<string, string> = {
       night_guard: 'protect',
       night_werewolf: 'kill',
+      night_wolf_beauty: 'charm',
       night_seer: 'check',
     }
     onAction(selected, actionMap[phase] || 'kill')
@@ -213,7 +219,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
       )}
 
       {/* Show wolf teammates when it's the werewolf phase */}
-      {phase === 'night_werewolf' && wolfTeammates.length > 0 && (
+      {(phase === 'night_werewolf' || phase === 'night_wolf_beauty') && wolfTeammates.length > 0 && (
         <div className="mb-4 bg-red-950 border border-red-800 rounded-xl p-3">
           <p className="text-red-300 text-xs font-semibold mb-1">🐺 你的狼人同伴</p>
           <div className="flex gap-2 flex-wrap">
@@ -231,7 +237,7 @@ export function NightPhase({ state, aiThinking, onAction, onSkip, triggerNightAi
         </div>
       )}
 
-      {phase === 'night_werewolf' && wolfTeammates.length === 0 && humanPlayer && isWerewolf(humanPlayer.role) && (
+      {(phase === 'night_werewolf' || phase === 'night_wolf_beauty') && wolfTeammates.length === 0 && humanPlayer && isWerewolf(humanPlayer.role) && (
         <div className="mb-4 bg-gray-800 border border-gray-700 rounded-xl p-3 text-center">
           <p className="text-gray-400 text-xs">你是唯一的狼人</p>
         </div>

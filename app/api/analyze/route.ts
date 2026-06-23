@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { applyProviderTuning, resolveAnalyzeProvider } from '../../lib/aiProvider'
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,26 +21,30 @@ export async function POST(req: NextRequest) {
 - 总字数控制在 600 字以内`
 
     const userPrompt = `以下是完整对局记录，请复盘分析：\n\n${transcript}`
+    const cfg = resolveAnalyzeProvider()
 
-    const resp = await fetch('https://api.deepseek.com/chat/completions', {
+    const body: Record<string, unknown> = {
+      model: cfg.model,
+      max_tokens: 1500,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }
+    applyProviderTuning(body, cfg)
+
+    const resp = await fetch(cfg.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+        Authorization: `Bearer ${cfg.key}`,
       },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        max_tokens: 1500,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(body),
     })
 
     if (!resp.ok) {
       const err = await resp.text()
-      console.error('DeepSeek analyze error:', err)
+      console.error(`${cfg.provider} analyze error:`, err)
       return NextResponse.json({ error: '分析失败' }, { status: 500 })
     }
 

@@ -791,12 +791,28 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
       ? state.players.find((p) => p.id === strategy.pushTargetId)?.name ?? null
       : null
 
+  // 预言家发言硬约束：绝不能把自己验过的金水说成可疑/狼；查杀才是要推的狼。
+  const seerFact = player.role === 'seer' ? seerVerified(player, state) : null
+  const nm = (id: string) => state.players.find((p) => p.id === id)?.name ?? '某玩家'
+  const seerFactNote =
+    seerFact && (seerFact.goodIds.length > 0 || seerFact.aliveWolfIds.length > 0)
+      ? `\n\n【你的验人结论（铁的事实，发言必须遵守）】${
+          seerFact.goodIds.length > 0
+            ? `\n- 金水（你亲自验过=确认好人）：${seerFact.goodIds.map(nm).join('、')}。绝不能在发言里说他们可疑、像狼或提议推他们；只能为他们作证/站边（是否公开金水看你的起跳策略）。`
+            : ''
+        }${
+          seerFact.aliveWolfIds.length > 0
+            ? `\n- 查杀（你亲自验过=确认狼人）：${seerFact.aliveWolfIds.map(nm).join('、')}。这才是你要重点怀疑、推动放逐的狼。`
+            : ''
+        }`
+      : ''
+
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
 ${progressNote}
 要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
-如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${wolfPlanNote}
+如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${seerFactNote}${wolfPlanNote}
 ${pushTargetName ? `\n本轮关键目标玩家名：${pushTargetName}。如果你的任务要求推动目标，发言里必须明确点名。` : ''}
   ${CLAIM_INSTRUCTION}
   返回 JSON：{"speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`

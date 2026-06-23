@@ -112,30 +112,30 @@ function computeSeerStrategy(player: Player, state: GameState): PlayerRoundStrat
     }
   }
 
-  // 4) 中期且已验多晚、只有金水 → 强烈倾向起跳建立信息
-  if (state.round >= 2 && checks.length >= 2) {
+  // 4) 只有金水（还没查到狼、无人对跳）→ 也要起跳报金水建立好人链
+  // 真人局里预言家验到金水照样会跳：早跳能立金水、带队，并抢在狼悍跳之前占住预言家位。
+  if (golds.length > 0) {
     return {
       ...base,
       shouldClaim: true,
       claimUrgency: 'strong',
       revealPrivateInfo: true,
+      mustClaimRole: 'seer',
       pushTargetId: null,
-      talkingGoal: `已到中期、你已积累多晚验人但还没查到狼：强烈建议本轮起跳预言家，公开金水（${
-        goldNames || '暂无'
-      }）建立可信好人阵营，带大家缩小狼人范围。`,
-      reason: '中期多晚验人，倾向起跳建立信息',
+      talkingGoal: `你已验人但还没查到狼。真人局里预言家验到金水也会起跳——本轮请明确起跳预言家、公开你的金水（${goldNames}），把金水立成可信好人并带队找狼；同时提醒大家场上很可能有狼悍跳预言家，注意分辨真假对跳。`,
+      reason: '仅金水也起跳报金水、抢占预言家位（贴合真人节奏，防狼悍跳）',
     }
   }
 
-  // 5) 仅金水、无人跳、前期 → 隐藏
+  // 5) 兜底：还没有任何验人结果（理论上白天不会发生）→ 暂不暴露
   return {
     ...base,
     shouldClaim: false,
     claimUrgency: 'hide',
     revealPrivateInfo: false,
     pushTargetId: null,
-    talkingGoal: `本轮先隐藏预言家身份：只做逻辑分析、表达怀疑倾向，绝不要暴露你是预言家或你的验人结果，避免过早被狼人锁定击杀。`,
-    reason: '仅金水且无人跳预言家，前期隐藏',
+    talkingGoal: `你暂时还没有验人结果，本轮先做逻辑分析、表达怀疑倾向，不要暴露身份。`,
+    reason: '暂无验人结果，先不起跳',
   }
 }
 
@@ -354,11 +354,57 @@ function computeHunterStrategy(player: Player, state: GameState): PlayerRoundStr
   }
 }
 
-// 入口：按角色分派。已实现预言家/狼人/女巫/猎人，其余返回 null。
+// 村民/白痴：无夜晚信息，靠公开信息推理。给具体任务，避免「先观察」式空话。
+function computeVillagerStrategy(player: Player, state: GameState): PlayerRoundStrategy {
+  const base = { role: player.role }
+  const seerClaims = state.publicClaims.filter(
+    (c) => c.claimType === 'seer' && !!c.targetId && (c.result === 'werewolf' || c.result === 'villager')
+  )
+  const seerClaimantIds = Array.from(new Set(seerClaims.map((c) => c.claimantId)))
+  const killClaim = seerClaims.find((c) => c.result === 'werewolf')
+  // 自己是否被「查杀」（好人被查杀必是狼悍跳）
+  const killedMe = state.publicClaims.some(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === player.id
+  )
+
+  // 1) 自己被查杀 → 表水自证、反指悍跳
+  if (killedMe) {
+    return {
+      ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
+      talkingGoal: `你被"预言家"查杀了：你只是普通村民，要认真表水自证（说清你的推理、为什么不是狼），并指出这个查杀你的"预言家"很可能是悍跳的狼，呼吁大家别被带偏。`,
+      reason: '被查杀，普通村民表水自证、反指悍跳',
+    }
+  }
+  // 2) 预言家对跳（≥2 人跳预言家）→ 必须站边
+  if (seerClaimantIds.length >= 2) {
+    return {
+      ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
+      talkingGoal: `场上有预言家对跳（${seerClaimantIds.map((id) => nameOf(state, id)).join(' / ')}）：你必须明确站边——比较双方的验人逻辑、发言一致性、票型和站边关系，说清你认为谁是真预言家、为什么；不能含糊说"再看看"。`,
+      reason: '预言家对跳，村民必须站边',
+    }
+  }
+  // 3) 单预言家报了查杀 → 讨论可信度并表态
+  if (killClaim) {
+    return {
+      ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
+      talkingGoal: `${nameOf(state, killClaim.claimantId)}以预言家身份查杀了${nameOf(state, killClaim.targetId)}：你要明确表态——这个预言家可信吗？要不要归票被查杀者？给出你的判断和理由（单预言家也可能是狼悍跳，但不能无理由否定）。`,
+      reason: '有查杀，村民需表态是否跟票',
+    }
+  }
+  // 4) 默认：给明确倾向，不要说空话
+  return {
+    ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
+    talkingGoal: `你是普通村民、没有夜晚信息。本轮给出一个明确倾向：点名一个你目前最怀疑的人并给出具体理由（发言前后矛盾、票型异常、强行带节奏、和谁抱团），不要只说"信息不多、先观察"这类空话。`,
+    reason: '常规局势，村民给明确怀疑倾向',
+  }
+}
+
+// 入口：按角色分派。已实现预言家/狼人/女巫/猎人/村民/白痴，其余返回 null。
 export function computeRoundStrategy(player: Player, state: GameState): PlayerRoundStrategy | null {
   if (player.role === 'seer') return computeSeerStrategy(player, state)
   if (player.role === 'witch') return computeWitchStrategy(player, state)
   if (player.role === 'hunter') return computeHunterStrategy(player, state)
   if (isWerewolf(player.role)) return computeWerewolfStrategy(player, state)
+  if (player.role === 'villager' || player.role === 'idiot') return computeVillagerStrategy(player, state)
   return null
 }

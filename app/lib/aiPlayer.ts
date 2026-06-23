@@ -654,10 +654,46 @@ function sanitizeRawClaims(raw: unknown): RawClaim[] {
   return out
 }
 
+// 预言家自己的验人结论：金水（确认好人，绝不该投）与存活查杀（应优先投）。
+function seerVerified(player: Player, state: GameState): { goodIds: string[]; aliveWolfIds: string[] } {
+  if (player.role !== 'seer') return { goodIds: [], aliveWolfIds: [] }
+  const goodIds = new Set<string>()
+  const aliveWolfIds = new Set<string>()
+  for (const a of state.nightActions) {
+    if (a.actorId !== player.id || a.actionType !== 'check' || !a.targetId) continue
+    const t = state.players.find((p) => p.id === a.targetId)
+    if (!t) continue
+    if (isWerewolf(t.role)) {
+      if (t.isAlive) aliveWolfIds.add(t.id)
+    } else {
+      goodIds.add(t.id)
+    }
+  }
+  return { goodIds: [...goodIds], aliveWolfIds: [...aliveWolfIds] }
+}
+
 function voteGuardrail(player: Player, state: GameState, candidates: Player[]): { instruction: string; fallbackId?: string } {
   const candidateIds = new Set(candidates.map((c) => c.id))
   const nameOf = (id?: string | null) => state.players.find((p) => p.id === id)?.name ?? '未知'
   const wolfIds = new Set(state.players.filter((p) => isWerewolf(p.role)).map((p) => p.id))
+
+  // 预言家最高优先级：绝不投自己验过的金水；有存活查杀则优先投。
+  if (player.role === 'seer') {
+    const { goodIds, aliveWolfIds } = seerVerified(player, state)
+    const liveWolfInCands = aliveWolfIds.find((id) => candidateIds.has(id))
+    if (goodIds.length > 0 || liveWolfInCands) {
+      const goodNames = goodIds.map(nameOf).join('、')
+      const wolfNames = aliveWolfIds.filter((id) => candidateIds.has(id)).map(nameOf).join('、')
+      return {
+        instruction: `你是预言家，依据你自己的验人结果：${
+          goodNames ? `你验过【${goodNames}】是金水（确认的好人），绝对不能投他们。` : ''
+        }${
+          wolfNames ? `你查杀过【${wolfNames}】，本轮应优先把票投给他。` : '你目前没有存活的查杀目标，就投你最怀疑的人，但绝不能投自己的金水。'
+        }`,
+        fallbackId: liveWolfInCands ?? undefined,
+      }
+    }
+  }
 
   const seerKillClaims = state.publicClaims.filter(
     (c) => c.claimType === 'seer' && c.result === 'werewolf' && !!c.targetId && candidateIds.has(c.claimantId)
@@ -1021,10 +1057,22 @@ ${guardrail.instruction}
 - 狼人要优先推动放逐关键好人或错误焦点，可借票型把水搅浑、分票自保或假意跟好人票；可以倒钩狼同伴，但不能无脑保护或无脑卖队友。
 必须选一个，不能弃票。
   返回 JSON：{"target":"玩家名字","reason":"简短理由"}`
+  // 预言家硬约束：绝不投自己验过的金水（即使 LLM 选了也强制改掉）
+  const seerInfo = seerVerified(player, state)
+  const overrideSeerGoodVote = (targetId: string): { targetId: string; reason: string } | null => {
+    if (player.role !== 'seer' || !seerInfo.goodIds.includes(targetId)) return null
+    const liveWolf = seerInfo.aliveWolfIds.find((id) => candidates.some((c) => c.id === id))
+    const safe = candidates.filter((c) => !seerInfo.goodIds.includes(c.id))
+    const fixedId = liveWolf ?? (safe.length ? pickRandom(safe).id : targetId)
+    return { targetId: fixedId, reason: '预言家不投自己的金水，改投查杀/其他可疑玩家' }
+  }
+
   try {
     const { parsed, trace } = await callAiJsonWithTrace(getInstruction(player), perspective, task)
     const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
     if (matched) {
+      const override = overrideSeerGoodVote(matched.id)
+      if (override) return { ...override, llmTrace: trace }
       return {
         targetId: matched.id,
         reason: sanitizeVoteReason(parsed.reason, state),
@@ -1034,8 +1082,10 @@ ${guardrail.instruction}
   } catch {
     // fall through to deterministic fallback
   }
+  // 兜底也要排除预言家自己的金水
+  const fallbackPool = candidates.filter((c) => !seerInfo.goodIds.includes(c.id))
   return {
-    targetId: guardrail.fallbackId ?? pickRandom(candidates).id,
+    targetId: guardrail.fallbackId ?? pickRandom(fallbackPool.length ? fallbackPool : candidates).id,
     reason: guardrail.fallbackId ? `AI 输出无效，按关键局势兜底：${guardrail.instruction}` : 'AI 输出无效，随机选择候选人兜底',
   }
 }

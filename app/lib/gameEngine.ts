@@ -230,6 +230,18 @@ export function processNightEnd(state: GameState): GameState {
   }
 
   newState = applyWolfBeautyLoversDeath(newState, nightDeaths, 'day_announce', true)
+  // 殉情目标会被加进 nightDeaths，需同步 night_result 日志的死亡名单，
+  // 否则天亮公告（读 state.nightDeaths）与历史/复盘（读日志）不一致。
+  if (newState.nightDeaths.length !== nightDeaths.length) {
+    newState = {
+      ...newState,
+      logs: newState.logs.map((l) =>
+        l.type === 'night_result' && l.round === state.round
+          ? { ...l, data: { ...l.data, deaths: newState.nightDeaths } }
+          : l
+      ),
+    }
+  }
   const win = checkWinCondition(newState)
   if (win) return { ...newState, winner: win, phase: 'game_over' }
 
@@ -531,6 +543,23 @@ export function processWhiteWolfKingExplode(state: GameState, actorId: string, t
         round: state.round,
         phase: 'day_discuss' as Phase,
         data: { action: 'white_wolf_king_explode', actorId: actor.id, targetId: target.id },
+        timestamp: Date.now(),
+      },
+      // 同时写死亡日志，供历史/复盘/AI transcript 识别（否则自爆死亡看不到）
+      {
+        id: genId(),
+        type: 'death' as const,
+        round: state.round,
+        phase: 'day_discuss' as Phase,
+        data: { playerId: actor.id, role: actor.role, reason: 'white_wolf_king_explode' },
+        timestamp: Date.now(),
+      },
+      {
+        id: genId(),
+        type: 'death' as const,
+        round: state.round,
+        phase: 'day_discuss' as Phase,
+        data: { playerId: target.id, role: target.role, reason: 'white_wolf_king_explode_victim', actorId: actor.id },
         timestamp: Date.now(),
       },
     ],

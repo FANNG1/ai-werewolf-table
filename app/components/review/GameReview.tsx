@@ -272,32 +272,56 @@ export function GameReview({ state, onNewGame }: Props) {
 	                    </div>
 	                  )}
 
-	                  {/* Deaths by vote */}
+	                  {/* Deaths（投票/殉情/自爆按 reason 区分，不再一律当投票出局）*/}
                   {deaths.map((log) => {
+                    const p = players.find((pl) => pl.id === log.data.playerId)
+                    const reason = log.data.reason as string | undefined
+
                     if (log.data.idiotSaved as boolean) {
-                      const p = players.find((pl) => pl.id === log.data.playerId)
                       return (
                         <p key={log.id} className="text-yellow-300 text-sm">
                           🃏 {p?.name}（白痴）被投票但免于出局！
                         </p>
                       )
                     }
-                    const p = players.find((pl) => pl.id === log.data.playerId)
+                    if (reason === 'wolf_beauty_lovers_death') {
+                      return (
+                        <p key={log.id} className="text-pink-300 text-sm">
+                          💔 {p?.name}（{p ? ROLE_NAMES[p.role] : ''}）与狼美人殉情出局
+                        </p>
+                      )
+                    }
+                    if (reason === 'white_wolf_king_explode') {
+                      return (
+                        <p key={log.id} className="text-red-300 text-sm">
+                          💥 {p?.name}（白狼王）自爆
+                        </p>
+                      )
+                    }
+                    if (reason === 'white_wolf_king_explode_victim') {
+                      return (
+                        <p key={log.id} className="text-red-300 text-sm">
+                          💥 {p?.name}（{p ? ROLE_NAMES[p.role] : ''}）被白狼王自爆带走
+                        </p>
+                      )
+                    }
                     const tally = (log.data.tally as Record<string, number>) || {}
                     return (
                       <div key={log.id}>
                         <p className="text-red-300 text-sm">
                           🗳️ 投票出局：{p?.name}（{p ? ROLE_NAMES[p.role] : ''}）
                         </p>
-                        <p className="text-gray-500 text-xs">
-                          票数：
-                          {Object.entries(tally)
-                            .map(([id, cnt]) => {
-                              const pl = players.find((pl) => pl.id === id)
-                              return `${pl?.name}:${cnt}票`
-                            })
-                            .join(' ')}
-                        </p>
+                        {Object.keys(tally).length > 0 && (
+                          <p className="text-gray-500 text-xs">
+                            票数：
+                            {Object.entries(tally)
+                              .map(([id, cnt]) => {
+                                const pl = players.find((pl) => pl.id === id)
+                                return `${pl?.name}:${cnt}票`
+                              })
+                              .join(' ')}
+                          </p>
+                        )}
                       </div>
                     )
                   })}

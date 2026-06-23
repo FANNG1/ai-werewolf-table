@@ -54,7 +54,11 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
     return arr
   }
 
-  const werewolfCount = (counts.werewolf || 0) + (counts.wolf_king || 0)
+  // 统计所有狼人阵营角色（含白狼王/狼美人），否则纯特殊狼配置会被误判为「没有狼人」
+  const werewolfCount = ALL_ROLES.reduce(
+    (sum, r) => sum + (ROLE_TEAMS[r] === 'werewolf' ? counts[r] || 0 : 0),
+    0
+  )
   const villagerCount = total - werewolfCount
   const preferredCounts = preferredRoles.reduce((acc, role) => {
     if (role) acc[role] = (acc[role] || 0) + 1

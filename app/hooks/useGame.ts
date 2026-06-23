@@ -240,10 +240,17 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
 
   const batch = (await Promise.all(tasks)).filter((a): a is NightAction => a !== null)
   const protectAction = batch.find((a) => a.actionType === 'protect')
+  // 按行动类型记录正确的相位，便于复盘审计（而非一律记成 night_werewolf）
+  const phaseForAction: Record<string, Phase> = {
+    protect: 'night_guard',
+    kill: 'night_werewolf',
+    charm: 'night_wolf_beauty',
+    check: 'night_seer',
+  }
   s = {
     ...s,
     nightActions: [...s.nightActions, ...batch],
-    logs: [...s.logs, ...batch.map((a) => logNightAction(a, 'night_werewolf'))],
+    logs: [...s.logs, ...batch.map((a) => logNightAction(a, phaseForAction[a.actionType] ?? 'night_werewolf'))],
     guardLastProtect: protectAction ? protectAction.targetId : s.guardLastProtect,
   }
 

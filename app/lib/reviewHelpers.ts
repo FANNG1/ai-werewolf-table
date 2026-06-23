@@ -193,13 +193,21 @@ export function buildGameTranscript(state: GameState): string {
       }
     }
 
-    // 出局
-    const deathLog = state.logs.find((l) => l.round === r && l.type === 'death')
-    if (deathLog) {
-      if (deathLog.data.idiotSaved) {
-        lines.push(`  投票结果：${nameOf(state, deathLog.data.playerId as string)}（白痴）现身免死`)
+    // 出局（列出本轮全部 death 日志，并按 reason 区分；不再只取第一条/一律当投票出局）
+    const deathLogs = state.logs.filter((l) => l.round === r && l.type === 'death')
+    for (const dl of deathLogs) {
+      const name = nameOf(state, dl.data.playerId as string)
+      const reason = dl.data.reason as string | undefined
+      if (dl.data.idiotSaved) {
+        lines.push(`  投票结果：${name}（白痴）现身免死`)
+      } else if (reason === 'wolf_beauty_lovers_death') {
+        lines.push(`  ${name} 与狼美人殉情出局`)
+      } else if (reason === 'white_wolf_king_explode') {
+        lines.push(`  ${name}（白狼王）自爆`)
+      } else if (reason === 'white_wolf_king_explode_victim') {
+        lines.push(`  ${name} 被白狼王自爆带走`)
       } else {
-        lines.push(`  投票出局：${nameOf(state, deathLog.data.playerId as string)}`)
+        lines.push(`  投票出局：${name}`)
       }
     }
 

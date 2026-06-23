@@ -80,7 +80,8 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
   // —— 公开局势 ——
   lines.push('')
   lines.push('【当前局势（所有人可见）】')
-  const alive = state.players.filter((p) => p.isAlive)
+  // 打乱存活名单顺序：真人固定是 p0、永远排在第一，会让 LLM 因首位偏好而过度针对「玩家1」
+  const alive = shuffleCopy(state.players.filter((p) => p.isAlive))
   lines.push(`第${state.round}天。存活玩家：${alive.map((p) => p.name).join('、')}`)
   const dead = state.players.filter((p) => !p.isAlive)
   if (dead.length) {
@@ -555,9 +556,23 @@ function validateCommonSenseText(text: string, state: GameState): string | null 
   if (/(警长|警徽|上警|退水|警下)/.test(text)) {
     return '本局没有警长、警徽、上警、退水、警下机制，不能提及这些概念。'
   }
+  // 只拦「明确提议把已出局者投出/归票/放逐」的措辞；
+  // 分析死者的过往票型、死因、身份是正常推理，不能误杀（否则有效发言会被替换成模板兜底）。
   for (const dead of state.players.filter((p) => !p.isAlive)) {
-    if (text.includes(dead.name) && /(归票|投票|投出|放逐|抗推|推出)/.test(text)) {
-      return `玩家${dead.name}已经出局，不能建议归票或放逐他。`
+    const n = dead.name
+    const proposesVoteOut =
+      text.includes('归票' + n) ||
+      text.includes('放逐' + n) ||
+      text.includes('投出' + n) ||
+      text.includes('票出' + n) ||
+      text.includes('推出' + n) ||
+      text.includes('带走' + n) ||
+      text.includes('把' + n + '投') ||
+      text.includes('把' + n + '推') ||
+      text.includes('把' + n + '票') ||
+      text.includes('把' + n + '放逐')
+    if (proposesVoteOut) {
+      return `玩家${n}已经出局，不能再提议归票或放逐他（分析他的过往票型/死因可以）。`
     }
   }
   return null

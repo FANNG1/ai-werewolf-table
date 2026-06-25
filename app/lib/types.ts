@@ -92,6 +92,7 @@ export interface PublicClaim {
   claimType: 'seer' | 'witch' | 'hunter' | 'guard' | 'idiot'
   targetId?: string | null
   result?: 'werewolf' | 'villager' | 'unknown' | null
+  witchAction?: 'antidote' | 'poison' | null
   rawSpeechId: string
   summary: string
 }

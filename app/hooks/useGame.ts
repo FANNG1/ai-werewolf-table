@@ -87,6 +87,7 @@ function rawClaimsToPublic(
             ? '金水'
             : '未知'
         : ''
+    const witchActionLabel = c.witchAction === 'antidote' ? '解药救了' : c.witchAction === 'poison' ? '毒药毒了' : '涉及'
     const summary =
       c.claimType === 'seer'
         ? target
@@ -94,7 +95,7 @@ function rawClaimsToPublic(
           : '声称预言家'
         : c.claimType === 'witch'
           ? target
-            ? `声称女巫信息：涉及${target.name}`
+            ? `声称女巫：${witchActionLabel}${target.name}（银水非验人）`
             : '声称女巫'
           : `声称${c.claimType === 'hunter' ? '猎人' : c.claimType === 'guard' ? '守卫' : '白痴'}`
     return {
@@ -104,6 +105,7 @@ function rawClaimsToPublic(
       claimType: c.claimType,
       targetId: target?.id ?? null,
       result: c.result ?? null,
+      witchAction: c.witchAction ?? null,
       rawSpeechId: speech.id,
       summary,
     }
@@ -288,6 +290,13 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
 export function useGame() {
   const [state, setState] = useState<GameState | null>(null)
   const [aiThinking, setAiThinking] = useState(false)
+  const [aiDebug, setAiDebug] = useState<{
+    label: string
+    active: boolean
+    startedAt: number | null
+    finishedAt: number | null
+    error?: string
+  } | null>(null)
   const processingRef = useRef(false)
 
   const startGame = useCallback((config: GameConfig) => {
@@ -389,6 +398,7 @@ export function useGame() {
       if (processingRef.current) return
       processingRef.current = true
       setAiThinking(true)
+      setAiDebug({ label: `夜晚 AI 处理：${phase}`, active: true, startedAt: Date.now(), finishedAt: null })
       try {
         setState((prev) => {
           if (!prev) return prev
@@ -546,13 +556,24 @@ export function useGame() {
               resolve()
             }
 
-            doActions().catch(console.error)
+            doActions().catch((err) => {
+              console.error(err)
+              setAiDebug({
+                label: `夜晚 AI 处理失败：${phase}`,
+                active: false,
+                startedAt: null,
+                finishedAt: Date.now(),
+                error: err instanceof Error ? err.message : String(err),
+              })
+              resolve()
+            })
             return prev // return prev synchronously
           })
         })
       } finally {
         processingRef.current = false
         setAiThinking(false)
+        setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
       }
     },
     []
@@ -562,6 +583,7 @@ export function useGame() {
     if (processingRef.current) return
     processingRef.current = true
     setAiThinking(true)
+    setAiDebug({ label: '白天 AI 发言', active: true, startedAt: Date.now(), finishedAt: null })
     try {
       const alivePlayers = currentState.players.filter((p) => p.isAlive)
       if (alivePlayers.length === 0) return
@@ -590,7 +612,18 @@ export function useGame() {
             const candidates = localState.players.filter((p) => p.isAlive && p.id !== player.id)
             const explosion = await decideWhiteWolfKingExplosion(player, localState, candidates)
             if (explosion.explode && explosion.targetId) {
-              const nextState = processWhiteWolfKingExplode(localState, player.id, explosion.targetId)
+              const stateWithAction: GameState = {
+                ...localState,
+                nightActions: [...localState.nightActions, {
+                  round: localState.round,
+                  actorId: player.id,
+                  targetId: explosion.targetId,
+                  actionType: 'explode' as const,
+                  reason: explosion.reason,
+                  llmTrace: explosion.llmTrace,
+                }],
+              }
+              const nextState = processWhiteWolfKingExplode(stateWithAction, player.id, explosion.targetId)
               setState(nextState)
               return
             }
@@ -643,6 +676,7 @@ export function useGame() {
     } finally {
       processingRef.current = false
       setAiThinking(false)
+      setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
     }
   }, [])
 
@@ -650,6 +684,7 @@ export function useGame() {
     if (processingRef.current) return
     processingRef.current = true
     setAiThinking(true)
+    setAiDebug({ label: '白天 AI 投票', active: true, startedAt: Date.now(), finishedAt: null })
     try {
       const round = currentState.round
       const voters = getEligibleVoters(currentState)
@@ -706,6 +741,7 @@ export function useGame() {
     } finally {
       processingRef.current = false
       setAiThinking(false)
+      setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
     }
   }, [])
 
@@ -796,18 +832,31 @@ export function useGame() {
 
     processingRef.current = true
     setAiThinking(true)
+    setAiDebug({ label: 'AI 猎人开枪', active: true, startedAt: Date.now(), finishedAt: null })
     try {
       const candidates = currentState.players.filter(
         (p) => p.isAlive && p.id !== currentState.pendingHunter
       )
-      const targetId = await decideShotTarget(shooter, currentState, candidates)
+      const decision = await decideShotTarget(shooter, currentState, candidates)
       setState((prev) => {
         if (!prev || prev.phase !== 'hunter_shoot' || prev.pendingHunter !== shooter.id) return prev
-        return processHunterShoot(prev, targetId)
+        const withAction: typeof prev = decision.shoot && decision.targetId ? {
+          ...prev,
+          nightActions: [...prev.nightActions, {
+            round: prev.round,
+            actorId: shooter.id,
+            targetId: decision.targetId,
+            actionType: 'shoot' as const,
+            reason: decision.reason,
+            llmTrace: decision.llmTrace,
+          }],
+        } : prev
+        return processHunterShoot(withAction, decision.shoot ? decision.targetId : null)
       })
     } finally {
       processingRef.current = false
       setAiThinking(false)
+      setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
     }
   }, [])
 
@@ -823,6 +872,7 @@ export function useGame() {
 
     processingRef.current = true
     setAiThinking(true)
+    setAiDebug({ label: 'AI 遗言', active: true, startedAt: Date.now(), finishedAt: null })
     try {
       const { content, claims, llmTrace } = await generateLastWords(dying, currentState)
       setState((prev) => {
@@ -858,6 +908,7 @@ export function useGame() {
     } finally {
       processingRef.current = false
       setAiThinking(false)
+      setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
     }
   }, [])
 
@@ -914,6 +965,7 @@ export function useGame() {
   return {
     state,
     aiThinking,
+    aiDebug,
     startGame,
     addSpeech,
     addVote,

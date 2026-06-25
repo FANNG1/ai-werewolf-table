@@ -104,12 +104,18 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
     publicClaims.forEach((claim) => {
       const claimant = state.players.find((p) => p.id === claim.claimantId)?.name ?? '未知'
       const target = claim.targetId ? state.players.find((p) => p.id === claim.targetId)?.name : null
-      const result =
-        claim.result === 'werewolf' ? '查杀/狼人'
+      let resultText = ''
+      if (claim.claimType === 'witch') {
+        resultText = claim.witchAction === 'antidote' ? '解药/银水（非验人）'
+          : claim.witchAction === 'poison' ? '毒药'
+          : target ? '涉及' : ''
+      } else {
+        resultText = claim.result === 'werewolf' ? '查杀/狼人'
           : claim.result === 'villager' ? '金水/好人'
-            : claim.result === 'unknown' ? '未知结果'
-              : ''
-      lines.push(`- 第${claim.round}天 ${claimant} 声明 ${claim.claimType}${target ? ` -> ${target}` : ''}${result ? ` = ${result}` : ''}；${claim.summary}`)
+          : claim.result === 'unknown' ? '未知结果'
+          : ''
+      }
+      lines.push(`- 第${claim.round}天 ${claimant} 声明 ${claim.claimType}${target ? ` -> ${target}` : ''}${resultText ? ` = ${resultText}` : ''}；${claim.summary}`)
     })
   }
 
@@ -229,7 +235,7 @@ function getLevelInstruction(role: Role): string {
   if (isWerewolf(role)) {
     return '你是资深狼人，冷静理性，善于伪装成好人、构造合理的误导、带节奏让好人内斗，并保护狼同伴。'
   }
-  return '你是资深好人，高度理性，综合所有发言、死亡和投票信息进行严密推理，精准锁定狼人。'
+  return '你是资深好人，高度理性，综合所有发言、死亡和投票信息进行推理；信息充足时给出明确倾向，信息不足时承认不确定，不把推测包装成确定事实。'
 }
 
 function getRoleStrategy(role: Role): string {
@@ -272,7 +278,10 @@ function getRoleStrategy(role: Role): string {
 - 解药和毒药都是一次性资源，不确定时不要轻易浪费。
 - 首夜救人通常收益较高，但后续要结合被刀者身份、发言强度和场上轮次判断。
 - 毒药应优先给高狼面玩家，避免毒死强神或可信好人。
-- 发言时可以分析银水、死亡信息和疑点，但不要无必要暴露女巫身份。`
+- 发言时可以分析银水、死亡信息和疑点，但不要无必要暴露女巫身份。
+- 银水不等于预言家金水：解药救人只说明"第X晚刀口是TA"，不能断言TA是好人，只能说"可信度较高/银水"。
+- 不能替狼人补全意图：你知道刀口和自己用药，但不知道狼人为什么刀某人、是否知道你的身份，不能把推测说成事实。
+- claims 中被救目标 result 用 unknown，绝不用 villager，避免和预言家金水混淆；witchAction 填 antidote（解药）或 poison（毒药）。`
     case 'hunter':
       return `你的猎人策略：
 - 白天主要像好人一样分析发言、票型和站边。
@@ -314,13 +323,16 @@ function getWerewolfCommonSenseInstruction(): string {
 - 不要引用不存在的信息：如果当前还没有公开发言/投票，不能说某人发言矛盾、站边、跟票、票型异常。
 - 票型含义：票投给谁表示想放逐/怀疑谁；某人票数高表示他正在被抗推，不表示大家支持他。
 - 私密信息隔离：只能使用自己身份能知道的信息。狼人知道狼同伴，预言家知道自己验人，女巫知道刀口和药，其他人不知道。
-- 狼人公开发言要伪装成好人，不要承认真实狼身份，不要泄露真实狼同伴，不要真心帮好人盘狼坑。
 - 好人面对预言家查杀要判断可信度：单预言家也可能是狼悍跳，对跳时要比较发言、验人逻辑和票型。
 - 神职被查杀时，自己知道对方是假预言家，可以拍身份挡推；旁观者不能无脑相信拍神。
 - 已出局狼人的发言可能是倒钩、做身份或反向误导，不能直接当真。
 - 当前游戏没有警长/警徽/上警机制，不要提及警长、警徽流、上警、退水、警下。
 - 只能推动放逐当前存活玩家，不能建议投票或归票已出局玩家。
-- 发言要像真人玩家：基于公开事实给倾向，不要编造不存在的事实。`
+- 发言要像真人玩家：基于公开事实给倾向，不要编造不存在的事实。
+- 守卫证伪规则：只有当守卫声称守了某人、但那个人当晚死亡，才能说明守卫是假的。若守卫守了A、死的是B（B≠A），两件事完全不矛盾——狼人可以刀其他人，不能以此推断守卫说谎。
+- 半跳预言家更可疑：真预言家通常选择全跳（报出完整验人信息）或深水隐藏，「半跳」（模糊宣称但不给完整信息）更像狼人在试探、蹭对跳压力，不能把半跳当成可信度更高的表现。
+- 神职收益原则：有查杀信息的真预言家通常会积极报出来推动局势；以"时机不对、怕被倒钩、再观望几轮"为由拖着不报，更像狼人在试探，不应轻易采信。
+- 第1天对跳判断：第1晚双方都只有一次验人记录，无法靠记录数量区分真假；唯一依据是发言逻辑质量——验人选择是否有充分理由、前后是否一致。全票或大多数人同向投票在第1天对跳中是狼队控场的常见特征，好人应质疑而非跟票。`
 }
 
 function getInstruction(player: Player): string {
@@ -626,6 +638,7 @@ export interface RawClaim {
   claimType: 'seer' | 'witch' | 'hunter' | 'guard' | 'idiot'
   targetName?: string | null
   result?: 'werewolf' | 'villager' | 'unknown' | null
+  witchAction?: 'antidote' | 'poison' | null
 }
 
 export interface AiSpeechResult {
@@ -645,10 +658,12 @@ function sanitizeRawClaims(raw: unknown): RawClaim[] {
     if (typeof ct !== 'string' || !types.includes(ct)) continue
     const tn = (c as Record<string, unknown>).targetName
     const rs = (c as Record<string, unknown>).result
+    const wa = (c as Record<string, unknown>).witchAction
     out.push({
       claimType: ct as RawClaim['claimType'],
       targetName: typeof tn === 'string' && tn.trim() && tn !== 'null' ? tn.trim() : null,
       result: typeof rs === 'string' && results.includes(rs) ? (rs as RawClaim['result']) : null,
+      witchAction: typeof wa === 'string' && (wa === 'antidote' || wa === 'poison') ? wa : null,
     })
   }
   return out
@@ -760,7 +775,9 @@ function voteGuardrail(player: Player, state: GameState, candidates: Player[]): 
 const CLAIM_INSTRUCTION = `同时，请如实标注你在这段话里【公开声明的、关于你自己的身份或信息】：
 - 只有当你确实跳了某身份、或报了验人/用药结果时才填 claims；普通分析、只是怀疑别人、不亮身份时 claims 必须是空数组 []。
 - claimType 必须是 seer/witch/hunter/guard/idiot 之一；targetName 是涉及的玩家名或 null；result 是 werewolf/villager/unknown 或 null。
-- 例：跳预言家并报查杀小明 → {"claimType":"seer","targetName":"小明","result":"werewolf"}；报金水小红 → result 填 villager。`
+- 女巫专用：witchAction 填 antidote（解药救人）或 poison（毒药毒人），result 固定填 unknown（不填 villager，银水不是验人金水）。
+- 例：跳预言家并报查杀小明 → {"claimType":"seer","targetName":"小明","result":"werewolf"}；报金水小红 → result 填 villager。
+- 例：跳女巫并报解药救了小明 → {"claimType":"witch","targetName":"小明","result":"unknown","witchAction":"antidote"}。`
 
 export async function generateAiSpeech(player: Player, state: GameState): Promise<AiSpeechResult> {
   const perspective = buildPlayerPerspective(player, state)
@@ -810,13 +827,14 @@ export async function generateAiSpeech(player: Player, state: GameState): Promis
   const task = `现在是第${state.round}天白天讨论阶段，轮到你发言。
 请基于你掌握的信息，以「${player.name}」的身份说一段话（第一人称、100字以内、中文）。
 ${progressNote}
-要符合你的角色立场和当前局势：好人要分析谁可疑、推动找狼；狼人要伪装好人、误导视线。
+要符合你的角色立场，基于公开信息和自身私密信息给出当前倾向。
 发言必须包含至少一个具体判断或倾向，例如：站边谁、怀疑谁、认可谁、为什么。
 如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${seerFactNote}${wolfPlanNote}
 ${pushTargetName ? `\n本轮关键目标玩家名：${pushTargetName}。如果你的任务要求推动目标，发言里必须明确点名。` : ''}
   ${CLAIM_INSTRUCTION}
 请先在 analysis 字段里用 1-2 句话简要推理（基于哪些公开信息/自己的身份信息得出本轮判断），再在 speech 写出最终发言——先想清楚再开口，不要说空话。
-返回 JSON：{"analysis":"简要推理（不会展示给其他玩家）","speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
+重要约束：speech 中不得直接或间接暴露未公开的私密信息（守护记录、真实身份、夜间行动结果），除非你已决定起跳且收益足够。
+返回 JSON：{"analysis":"简要推理（仅供系统使用，绝不展示给其他玩家）","speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
     let result = await callAiJsonWithTrace(getInstruction(player), perspective, task, 900)
     let parsed = result.parsed
@@ -1338,8 +1356,8 @@ export async function decideShotTarget(
   shooter: Player,
   state: GameState,
   candidates: Player[]
-): Promise<string | null> {
-  if (candidates.length === 0) return null
+): Promise<AiTargetDecision & { shoot: boolean }> {
+  if (candidates.length === 0) return { shoot: false, targetId: null, reason: '没有可射击目标' }
 
   const isWolfShooter = isWerewolf(shooter.role)
   const task = `你已经死亡，现在可以选择是否开枪带走一名玩家。
@@ -1351,19 +1369,19 @@ ${isWolfShooter
 返回 JSON：{"shoot": true或false, "target":"玩家名字或null", "reason":"简短理由"}`
 
   try {
-    const parsed = await callAiJson(getInstruction(shooter), buildPlayerPerspective(shooter, state), task)
-    if (parsed.shoot !== true) return null
+    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(shooter), buildPlayerPerspective(shooter, state), task)
+    if (parsed.shoot !== true) return { shoot: false, targetId: null, reason: sanitizeDecisionReason(parsed.reason, state), llmTrace: trace }
     const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
-    if (matched) return matched.id
+    if (matched) return { shoot: true, targetId: matched.id, reason: sanitizeDecisionReason(parsed.reason, state), llmTrace: trace }
   } catch {
     // fall through to heuristic
   }
 
   if (isWolfShooter) {
     const nonWolves = candidates.filter((p) => !isWerewolf(p.role))
-    return (nonWolves[0] ?? candidates[0]).id
+    return { shoot: true, targetId: (nonWolves[0] ?? candidates[0]).id, reason: 'AI 输出无效，兜底射击非狼玩家' }
   }
 
   // 猎人兜底：没有足够把握时不开枪，避免随机误伤。
-  return null
+  return { shoot: false, targetId: null, reason: 'AI 输出无效，猎人保守不开枪' }
 }

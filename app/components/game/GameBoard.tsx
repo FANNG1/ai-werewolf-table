@@ -12,6 +12,13 @@ import { PlayerCard } from './PlayerCard'
 interface Props {
   state: GameState
   aiThinking: boolean
+  aiDebug: {
+    label: string
+    active: boolean
+    startedAt: number | null
+    finishedAt: number | null
+    error?: string
+  } | null
   onHumanSpeak: (content: string) => void
   onFinishDiscussion: () => void
   onVote: (targetId: string) => void
@@ -33,6 +40,7 @@ interface Props {
 export function GameBoard({
   state,
   aiThinking,
+  aiDebug,
   onHumanSpeak,
   onFinishDiscussion,
   onVote,
@@ -55,6 +63,26 @@ export function GameBoard({
   const [showHistory, setShowHistory] = useState(false)
   const humanPlayer = players.find((p) => p.isHuman)
   const isNight = phase.startsWith('night')
+  const showDebug = process.env.NODE_ENV !== 'production'
+  const alivePlayers = players.filter((p) => p.isAlive)
+  const eligibleVoters = players.filter((p) => p.isAlive && !(p.role === 'idiot' && p.idiotUsed))
+  const currentSpeaker = alivePlayers.length > 0 ? alivePlayers[state.currentSpeakerIndex % alivePlayers.length] : null
+  const currentVoter = eligibleVoters.length > 0 ? eligibleVoters[state.currentVoterIndex % eligibleVoters.length] : null
+  const pendingPlayer = state.pendingLastWords
+    ? players.find((p) => p.id === state.pendingLastWords)
+    : state.pendingHunter
+      ? players.find((p) => p.id === state.pendingHunter)
+      : null
+  const currentActor =
+    phase === 'day_discuss'
+      ? currentSpeaker
+      : phase === 'day_vote'
+        ? currentVoter
+        : pendingPlayer
+  const currentActorLabel = currentActor
+    ? currentActor.name + (currentActor.isHuman ? '（真人）' : '（AI）')
+    : '无'
+  const latestLog = state.logs[state.logs.length - 1]
 
   // Auto-trigger AI speeches while the current speaker is an AI player.
   useEffect(() => {
@@ -159,6 +187,20 @@ export function GameBoard({
         </div>
       )}
 
+      {showDebug && (
+        <div className="mx-3 mb-2 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-xs text-amber-100 flex-shrink-0">
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <span>诊断: {aiThinking ? 'AI 思考中' : '空闲'}</span>
+            <span>阶段: {phase}</span>
+            <span>轮次: {round}</span>
+            <span>当前: {currentActorLabel}</span>
+            <span>AI 动作: {aiDebug ? aiDebug.label : '无'}</span>
+            {latestLog && <span>最近日志: {latestLog.type}</span>}
+          </div>
+          {aiDebug?.error && <div className="mt-1 text-red-200">错误: {aiDebug.error}</div>}
+        </div>
+      )}
+
       {/* Main phase content — fills remaining height; phases scroll internally */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {isNightPhase && (
@@ -186,27 +228,25 @@ export function GameBoard({
         )}
       </div>
 
-      {/* History peek button */}
-      <div className="fixed bottom-4 left-4">
-        <button
-          onClick={() => setShowHistory(true)}
-          className="bg-gray-800 border border-gray-600 text-white rounded-full px-4 py-2 text-sm shadow-lg"
-        >
-          📜 记录
-        </button>
-      </div>
-
-      {/* Role peek button */}
-      {humanPlayer && (
-        <div className="fixed bottom-4 right-4">
+      <div className="flex-shrink-0 border-t border-gray-800 bg-gray-950/95 px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
           <button
-            onClick={() => setShowRoleModal(true)}
+            onClick={() => setShowHistory(true)}
             className="bg-gray-800 border border-gray-600 text-white rounded-full px-4 py-2 text-sm shadow-lg"
           >
-            我的角色 {ROLE_EMOJIS[humanPlayer.role]}
+            📜 记录
           </button>
+
+          {humanPlayer && (
+            <button
+              onClick={() => setShowRoleModal(true)}
+              className="bg-gray-800 border border-gray-600 text-white rounded-full px-4 py-2 text-sm shadow-lg"
+            >
+              我的角色 {ROLE_EMOJIS[humanPlayer.role]}
+            </button>
+          )}
         </div>
-      )}
+      </div>
 
       {showHistory && <HistoryModal state={state} onClose={() => setShowHistory(false)} />}
 

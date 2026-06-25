@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { isWerewolf, ROLE_EMOJIS, ROLE_NAMES } from '../../lib/roles'
-import { buildGameTranscript, getNightActionsForRound } from '../../lib/reviewHelpers'
+import { buildGameTranscript, getNightActionsForRound, getVictoryReason } from '../../lib/reviewHelpers'
 import type { GameState } from '../../lib/types'
 
 interface Props {
@@ -56,6 +56,7 @@ export function GameReview({ state, onNewGame }: Props) {
         <div className="text-4xl mb-2">{winner === 'werewolves' ? '🐺' : '🏡'}</div>
         <h2 className="text-xl font-bold text-white mb-1">{winnerTeam}阵营获胜！</h2>
         <p className="text-gray-400 text-sm">共 {round} 轮</p>
+        <p className="mt-2 text-sm text-amber-200">{getVictoryReason(state)}</p>
       </div>
 
       {/* Deep analysis */}

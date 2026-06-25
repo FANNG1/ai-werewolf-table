@@ -9,7 +9,7 @@ import type { GameConfig } from '../lib/types'
 
 function GamePageInner() {
   const searchParams = useSearchParams()
-  const { state, aiThinking, startGame, addSpeech, addVote, submitNightAction, skipNightAction,
+  const { state, aiThinking, aiDebug, startGame, addSpeech, addVote, submitNightAction, skipNightAction,
     finishDiscussion, submitVoteAndProcess, submitHunterShoot, submitWhiteWolfKingExplode, startReview,
     triggerNightAi, triggerAiSpeeches, triggerAiVotes, triggerAiHunterShoot,
     triggerAiLastWords, proceedAfterLastWords, submitHumanLastWords } = useGame()
@@ -54,6 +54,7 @@ function GamePageInner() {
     <GameBoard
       state={state}
       aiThinking={aiThinking}
+      aiDebug={aiDebug}
       onHumanSpeak={(content) => {
         const human = state.players.find((p) => p.isHuman)
         if (human) addSpeech(human.id, content)

@@ -1,5 +1,32 @@
-import { isWerewolf, ROLE_NAMES } from './roles'
+import { isCivilian, isDeity, isWerewolf, ROLE_NAMES } from './roles'
 import type { GameState, NightAction } from './types'
+
+
+export function getVictoryReason(state: GameState): string {
+  const aliveWolves = state.players.filter((p) => p.isAlive && isWerewolf(p.role))
+  const deities = state.players.filter((p) => isDeity(p.role))
+  const aliveDeities = deities.filter((p) => p.isAlive)
+  const civilians = state.players.filter((p) => isCivilian(p.role))
+  const aliveCivilians = civilians.filter((p) => p.isAlive)
+
+  if (state.winner === 'villagers') {
+    return aliveWolves.length === 0
+      ? '所有狼人都已出局，村民阵营获胜。'
+      : '村民阵营获胜。'
+  }
+
+  if (state.winner === 'werewolves') {
+    if (deities.length > 0 && aliveDeities.length === 0) {
+      return `神职已全部出局（屠神）：${deities.map((p) => p.name).join('、')} 都已死亡。`
+    }
+    if (civilians.length > 0 && aliveCivilians.length === 0) {
+      return `平民已全部出局（屠民）：${civilians.map((p) => p.name).join('、')} 都已死亡。`
+    }
+    return '狼人阵营获胜。'
+  }
+
+  return '游戏尚未结束。'
+}
 
 export interface NightActionDetail {
   icon: string
@@ -122,6 +149,37 @@ export function getNightActionsForRound(state: GameState, round: number): NightA
     })
   }
 
+  // 猎人/狼王开枪
+  for (const a of actions.filter((x) => x.actionType === 'shoot')) {
+    const actor = state.players.find((p) => p.id === a.actorId)
+    const isWolfRole = actor?.role === 'wolf_king' || actor?.role === 'white_wolf_king'
+    details.push({
+      icon: '🔫',
+      actorName: actor?.name ?? '猎人',
+      roleName: isWolfRole ? '狼王' : '猎人',
+      description: a.targetId ? `开枪带走了 ${nameOf(state, a.targetId)}` : '选择不开枪',
+      reason: a.reason,
+      llmPrompt: a.llmTrace ? `${a.llmTrace.instruction}\n\n${a.llmTrace.perspective}\n\n${a.llmTrace.task}` : undefined,
+      llmResponse: a.llmTrace?.rawResponse,
+      isWolf: !!isWolfRole,
+    })
+  }
+
+  // 白狼王自爆
+  for (const a of actions.filter((x) => x.actionType === 'explode')) {
+    const actor = state.players.find((p) => p.id === a.actorId)
+    details.push({
+      icon: '💥',
+      actorName: actor?.name ?? '白狼王',
+      roleName: '白狼王',
+      description: `自爆带走了 ${nameOf(state, a.targetId)}`,
+      reason: a.reason,
+      llmPrompt: a.llmTrace ? `${a.llmTrace.instruction}\n\n${a.llmTrace.perspective}\n\n${a.llmTrace.task}` : undefined,
+      llmResponse: a.llmTrace?.rawResponse,
+      isWolf: true,
+    })
+  }
+
   return details
 }
 
@@ -132,6 +190,7 @@ export function buildGameTranscript(state: GameState): string {
 
   lines.push('【对局信息】')
   lines.push(`获胜方：${winner === 'werewolves' ? '狼人阵营' : '村民阵营'}`)
+  lines.push(`胜负原因：${getVictoryReason(state)}`)
   lines.push(`总轮数：${round} 轮`)
   lines.push('')
 

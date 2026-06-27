@@ -55,7 +55,11 @@ export function DayPhase({
     currentSpeaker?.id === humanPlayer.id &&
     !humanHasSpoken
   const canProceedToVote = !aiThinking && allAlivePlayersSpoken
-  const humanCanExplode = humanCanSpeak && humanPlayer?.role === 'white_wolf_king'
+  const humanCanExplode =
+    !aiThinking &&
+    !!humanPlayer?.isAlive &&
+    humanPlayer?.role === 'white_wolf_king' &&
+    phase === 'day_discuss'
 
   useEffect(() => {
     speechEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -77,7 +81,7 @@ export function DayPhase({
               if (!p) return null
               return (
                 <div key={id} className="text-red-300 font-semibold text-lg">
-                  {p.name} 出局（身份保密）
+                  {p.seatNumber}号 {p.name} 出局（身份保密）
                 </div>
               )
             })}
@@ -105,7 +109,7 @@ export function DayPhase({
       <div className="bg-purple-950 min-h-full p-6 flex flex-col items-center">
         <div className="text-5xl mb-3">🕯️</div>
         <h2 className="text-xl font-bold text-purple-200 mb-1">
-          {dying?.name} 的遗言
+          {dying?.seatNumber}号 {dying?.name} 的遗言
         </h2>
         <p className="text-purple-400 text-sm mb-6 text-center">
           {pendingLastWordsSource === 'night'
@@ -182,7 +186,7 @@ export function DayPhase({
       <div className="bg-red-950 min-h-full p-6 flex flex-col items-center">
         <div className="text-5xl mb-4">🏹</div>
         <h2 className="text-xl font-bold text-red-200 mb-2">
-          {hunter?.name} 正在行动
+          {hunter?.seatNumber}号 {hunter?.name} 正在行动
         </h2>
         <p className="text-red-300 text-sm mb-6 text-center">
           猎人/狼王可以开枪带走一名玩家，或选择放弃
@@ -276,34 +280,35 @@ export function DayPhase({
         {/* Sticky bottom area — always visible */}
         <div className="flex-shrink-0 border-t border-gray-700">
           {/* Human input */}
+          {humanCanExplode && (
+            <div className="p-3 bg-red-950/30 border-b border-red-900">
+              <p className="text-xs text-red-300 font-semibold mb-2">💥 白狼王自爆带人（可随时触发）</p>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {alivePlayers.filter((p) => p.id !== humanPlayer?.id).map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setExplodeTarget(explodeTarget === p.id ? null : p.id)}
+                    className={`rounded-lg border px-2 py-2 text-xs ${explodeTarget === p.id ? 'border-red-400 bg-red-900 text-white' : 'border-gray-700 bg-gray-900 text-gray-300'}`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => {
+                  if (humanPlayer && explodeTarget) onWhiteWolfKingExplode(humanPlayer.id, explodeTarget)
+                }}
+                disabled={!explodeTarget}
+                className="w-full rounded-lg bg-red-700 py-2 text-sm font-semibold text-white disabled:opacity-40"
+              >
+                自爆并带走 {explodeTarget ? players.find((p) => p.id === explodeTarget)?.name : '...'}
+              </button>
+            </div>
+          )}
+
           {humanCanSpeak && (
             <div className="p-4 bg-gray-800">
               <p className="text-xs text-blue-400 font-semibold mb-2">💬 轮到你发言了</p>
-              {humanCanExplode && (
-                <div className="mb-3 rounded-lg border border-red-800 bg-red-950/40 p-3">
-                  <p className="text-xs text-red-300 font-semibold mb-2">白狼王自爆带人</p>
-                  <div className="grid grid-cols-3 gap-2 mb-3">
-                    {alivePlayers.filter((p) => p.id !== humanPlayer?.id).map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => setExplodeTarget(explodeTarget === p.id ? null : p.id)}
-                        className={`rounded-lg border px-2 py-2 text-xs ${explodeTarget === p.id ? 'border-red-400 bg-red-900 text-white' : 'border-gray-700 bg-gray-900 text-gray-300'}`}
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (humanPlayer && explodeTarget) onWhiteWolfKingExplode(humanPlayer.id, explodeTarget)
-                    }}
-                    disabled={!explodeTarget}
-                    className="w-full rounded-lg bg-red-700 py-2 text-sm font-semibold text-white disabled:opacity-40"
-                  >
-                    自爆并带走 {explodeTarget ? players.find((p) => p.id === explodeTarget)?.name : '...'}
-                  </button>
-                </div>
-              )}
               <div className="flex gap-2">
                 <textarea
                   value={humanSpeech}

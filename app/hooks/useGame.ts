@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
-import { decideNightAction, decideShotTarget, decideWerewolfKill, decideWitchAction, decideWhiteWolfKingExplosion, decideWolfBeautyCharm, generateAiSpeech, generateAiVote, generateLastWords, generateWolfPlan } from '../lib/aiPlayer'
+import { decideNightAction, decideShotTarget, decideWitchAction, decideWhiteWolfKingExplosion, decideWolfBeautyCharm, fallbackWolfPlan, generateAiSpeech, generateAiVote, generateLastWords, generateWolfCouncilOpinion, judgeWolfCouncilDecision } from '../lib/aiPlayer'
 import type { RawClaim } from '../lib/aiPlayer'
 import {
   checkWinCondition,
@@ -16,7 +16,7 @@ import {
   processVote,
 } from '../lib/gameEngine'
 import { isWerewolf } from '../lib/roles'
-import type { GameConfig, GameState, NightAction, Phase, PublicClaim, Role } from '../lib/types'
+import type { GameConfig, GameState, NightAction, Phase, PublicClaim, Role, WolfCouncilOpinion } from '../lib/types'
 
 function genId() {
   return Math.random().toString(36).slice(2, 9)
@@ -180,84 +180,200 @@ function extractPublicClaims(state: GameState, speech: { id: string; playerId: s
   return claims
 }
 
-// 狼队夜间协商：在夜里（不知道天亮结果前）预先商定次日计划。
-// 每个轮次最多生成一次；有人类狼时也生成，AI 队友白天会按计划配合。
-async function maybeGenerateWolfPlan(s: GameState): Promise<GameState> {
-  if (s.wolfPlanRound === s.round) return s
+async function resolveWolfCouncil(
+  s: GameState,
+  seedOpinions: WolfCouncilOpinion[] = [],
+  forcedTargetId?: string | null
+): Promise<GameState> {
   const wolves = getAliveWerewolves(s)
-  if (wolves.length === 0) return s
-  const hasKill = s.nightActions.some((a) => a.round === s.round && a.actionType === 'kill')
-  if (!hasKill) return s
-  const plan = await generateWolfPlan(wolves, s)
-  return { ...s, wolfPlan: plan, wolfPlanRound: s.round }
+  const candidates = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+  const alreadyKilling = s.nightActions.some((a) => a.round === s.round && a.actionType === 'kill')
+  if (wolves.length === 0 || candidates.length === 0 || alreadyKilling) return s
+
+  const wolfIds = new Set(wolves.map((w) => w.id))
+  const currentSeedOpinions = seedOpinions.filter(
+    (o) => o.round === s.round && wolfIds.has(o.wolfId)
+  )
+  const knownOpinionIds = new Set(currentSeedOpinions.map((o) => o.wolfId))
+  const missingWolves = wolves.filter((w) => !knownOpinionIds.has(w.id) && !w.isHuman)
+  const aiOpinions = await Promise.all(
+    missingWolves.map((wolf) => generateWolfCouncilOpinion(wolf, wolves, s, candidates))
+  )
+  const opinions = [...currentSeedOpinions, ...aiOpinions]
+  const judged = await judgeWolfCouncilDecision(wolves, s, opinions, forcedTargetId)
+  if (!judged.targetId) {
+    return {
+      ...s,
+      wolfCouncilOpinions: opinions,
+      wolfCouncilRound: s.round,
+      wolfPlan: judged.plan,
+      wolfPlanRound: s.round,
+    }
+  }
+
+  const killer = wolves[0]
+  const action: NightAction = {
+    round: s.round,
+    actorId: killer.id,
+    targetId: judged.targetId,
+    actionType: 'kill',
+    reason: judged.reason,
+    llmTrace: judged.llmTrace,
+  }
+  return {
+    ...s,
+    nightActions: [...s.nightActions, action],
+    logs: [...s.logs, logNightAction(action, 'night_werewolf')],
+    wolfCouncilOpinions: opinions,
+    wolfCouncilRound: s.round,
+    wolfPlan: judged.plan,
+    wolfPlanRound: s.round,
+  }
+}
+
+function resolveWolfCouncilFallback(s: GameState, reason: string): GameState {
+  const wolves = getAliveWerewolves(s)
+  const alreadyKilling = s.nightActions.some((a) => a.round === s.round && a.actionType === 'kill')
+  if (wolves.length === 0 || alreadyKilling) return s
+  const target = s.players.find((p) => p.isAlive && !isWerewolf(p.role))
+  if (!target) return s
+  const opinions: WolfCouncilOpinion[] = wolves.map((wolf) => ({
+    round: s.round,
+    wolfId: wolf.id,
+    targetId: target.id,
+    reason,
+    dayStrategy: wolf.role === 'wolf_beauty'
+      ? '深水隐藏，轻踩狼队主推目标，重点降低自身处理优先级。'
+      : `伪装好人视角，把焦点引向${target.name}，避免暴露狼队夜间信息。`,
+    positionStrategy: '根据自己的发言顺序和座位相邻关系调整力度，避免和狼同伴重复同一种发言。',
+  }))
+  const plan = {
+    ...fallbackWolfPlan(wolves, s),
+    finalKillTargetId: target.id,
+    pushTargetId: target.id,
+    decisionReason: reason,
+  }
+  const action: NightAction = {
+    round: s.round,
+    actorId: wolves[0].id,
+    targetId: target.id,
+    actionType: 'kill',
+    reason,
+  }
+  return {
+    ...s,
+    nightActions: [...s.nightActions, action],
+    logs: [...s.logs, logNightAction(action, 'night_werewolf')],
+    wolfCouncilOpinions: opinions,
+    wolfCouncilRound: s.round,
+    wolfPlan: plan,
+    wolfPlanRound: s.round,
+  }
+}
+
+function fallbackNightAiPhase(state: GameState, phase: Phase): GameState {
+  if (phase === 'night_werewolf') {
+    return advanceNightOrResolve(
+      resolveWolfCouncilFallback(state, '夜晚 AI 狼队会议异常，系统按兜底逻辑选择首个合法目标'),
+      'night_werewolf'
+    )
+  }
+  if (phase === 'night_witch') {
+    return processNightEnd(state)
+  }
+  if (phase === 'night_guard' || phase === 'night_wolf_beauty' || phase === 'night_seer') {
+    return advanceNightOrResolve(state, phase)
+  }
+  return state
+}
+
+function actionMatchesPhase(phase: Phase, actionType: NightAction['actionType']): boolean {
+  if (phase === 'night_guard') return actionType === 'protect'
+  if (phase === 'night_werewolf') return actionType === 'kill'
+  if (phase === 'night_wolf_beauty') return actionType === 'charm'
+  if (phase === 'night_seer') return actionType === 'check'
+  if (phase === 'night_witch') return actionType === 'heal' || actionType === 'poison'
+  return false
 }
 
 // 纯 AI 夜晚：守卫/狼人/预言家互不依赖，并行决策；女巫依赖狼刀结果，最后处理。
 // 把原本 4 次串行 LLM 调用压缩为「3 并行 + 1」，显著缩短「天黑请闭眼」等待。
 async function resolvePureAiNight(s0: GameState): Promise<GameState> {
   let s = s0
-  const tasks: Promise<NightAction | null>[] = []
 
   const guard = s.players.find((p) => p.isAlive && p.role === 'guard' && !p.isHuman)
-  if (guard) {
-    const cands = s.players.filter((p) => p.isAlive && p.id !== s.guardLastProtect)
-    tasks.push(
-      decideNightAction(guard, s, 'protect', cands).then((d) =>
+  const guardPromise: Promise<NightAction | null> = guard
+    ? decideNightAction(
+        guard,
+        s,
+        'protect',
+        s.players.filter((p) => p.isAlive && p.id !== s.guardLastProtect)
+      ).then((d) =>
         d.targetId ? ({ round: s.round, actorId: guard.id, targetId: d.targetId, actionType: 'protect', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
-      )
-    )
-  }
-  const wolves = getAliveWerewolves(s).filter((p) => !p.isHuman)
-  if (wolves.length > 0) {
-    const killer = wolves[0]
-    const cands = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
-    tasks.push(
-      decideWerewolfKill(wolves, s, cands).then((d) =>
-        d.targetId ? ({ round: s.round, actorId: killer.id, targetId: d.targetId, actionType: 'kill', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
-      )
-    )
-  }
-  const wolfBeauty = s.players.find((p) => p.isAlive && p.role === 'wolf_beauty' && !p.isHuman)
-  if (wolfBeauty) {
-    const cands = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
-    tasks.push(
-      decideWolfBeautyCharm(wolfBeauty, s, cands).then((d) =>
-        d.targetId ? ({ round: s.round, actorId: wolfBeauty.id, targetId: d.targetId, actionType: 'charm', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
-      )
-    )
-  }
+      ).catch(() => null)
+    : Promise.resolve(null)
 
   const seer = s.players.find((p) => p.isAlive && p.role === 'seer' && !p.isHuman)
-  if (seer) {
-    const checkedIds = getCheckedIds(s, seer.id)
-    const cands = s.players.filter(
-      (p) => p.isAlive && p.id !== seer.id && !checkedIds.includes(p.id)
-    )
-    tasks.push(
-      decideNightAction(seer, s, 'check', cands).then((d) =>
+  const seerPromise: Promise<NightAction | null> = seer
+    ? decideNightAction(
+        seer,
+        s,
+        'check',
+        s.players.filter((p) => p.isAlive && p.id !== seer.id && !getCheckedIds(s, seer.id).includes(p.id))
+      ).then((d) =>
         d.targetId ? ({ round: s.round, actorId: seer.id, targetId: d.targetId, actionType: 'check', reason: d.reason, llmTrace: d.llmTrace } as NightAction) : null
-      )
-    )
+      ).catch(() => null)
+    : Promise.resolve(null)
+
+  const wolves = getAliveWerewolves(s)
+  const wolfCandidates = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+  const wolfOpinionsPromise: Promise<WolfCouncilOpinion[]> =
+    wolves.length > 0 && wolfCandidates.length > 0
+      ? Promise.all(wolves.map((wolf) => generateWolfCouncilOpinion(wolf, wolves, s, wolfCandidates))).catch(() => [])
+      : Promise.resolve([])
+
+  const [guardAction, wolfOpinions] = await Promise.all([guardPromise, wolfOpinionsPromise])
+  if (guardAction) {
+    s = {
+      ...s,
+      nightActions: [...s.nightActions, guardAction],
+      logs: [...s.logs, logNightAction(guardAction, 'night_guard')],
+      guardLastProtect: guardAction.targetId,
+    }
   }
 
-  const batch = (await Promise.all(tasks)).filter((a): a is NightAction => a !== null)
-  const protectAction = batch.find((a) => a.actionType === 'protect')
-  // 按行动类型记录正确的相位，便于复盘审计（而非一律记成 night_werewolf）
-  const phaseForAction: Record<string, Phase> = {
-    protect: 'night_guard',
-    kill: 'night_werewolf',
-    charm: 'night_wolf_beauty',
-    check: 'night_seer',
-  }
-  s = {
-    ...s,
-    nightActions: [...s.nightActions, ...batch],
-    logs: [...s.logs, ...batch.map((a) => logNightAction(a, phaseForAction[a.actionType] ?? 'night_werewolf'))],
-    guardLastProtect: protectAction ? protectAction.targetId : s.guardLastProtect,
+  // 狼队先协商，再由普通 AI 仲裁最终刀口和次日计划；AI 狼意见已与守卫/预言家并行生成。
+  try {
+    s = await resolveWolfCouncil(s, wolfOpinions)
+  } catch {
+    s = resolveWolfCouncilFallback(s, '狼队会议异常，系统按兜底逻辑选择首个合法目标')
   }
 
-  // 狼刀已定，趁天亮前商定次日计划（此刻还不知道女巫是否会救、最终谁死）
-  s = await maybeGenerateWolfPlan(s)
+  const wolfBeauty = s.players.find((p) => p.isAlive && p.role === 'wolf_beauty' && !p.isHuman)
+  const alreadyCharmed = s.nightActions.some(
+    (a) => a.round === s.round && a.actionType === 'charm' && a.actorId === wolfBeauty?.id
+  )
+  if (wolfBeauty && !alreadyCharmed) {
+    const cands = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+    const decision = await decideWolfBeautyCharm(wolfBeauty, s, cands).catch(() => ({ targetId: null, reason: '狼美人行动异常，跳过魅惑' }))
+    if (decision.targetId) {
+      const action: NightAction = { round: s.round, actorId: wolfBeauty.id, targetId: decision.targetId, actionType: 'charm', reason: decision.reason, llmTrace: decision.llmTrace }
+      s = {
+        ...s,
+        nightActions: [...s.nightActions, action],
+        logs: [...s.logs, logNightAction(action, 'night_wolf_beauty')],
+      }
+    }
+  }
+
+  const seerAction = await seerPromise
+  if (seerAction) {
+    s = {
+      ...s,
+      nightActions: [...s.nightActions, seerAction],
+      logs: [...s.logs, logNightAction(seerAction, 'night_seer')],
+    }
+  }
 
   const witch = s.players.find((p) => p.isAlive && p.role === 'witch' && !p.isHuman)
   if (witch) {
@@ -266,7 +382,7 @@ async function resolvePureAiNight(s0: GameState): Promise<GameState> {
         .filter((a) => a.round === s.round && a.actionType === 'kill')
         .map((a) => a.targetId)[0] ?? null
     const poisonCands = s.players.filter((p) => p.isAlive && p.id !== witch.id)
-    const decision = await decideWitchAction(witch, s, killedId, poisonCands)
+    const decision = await decideWitchAction(witch, s, killedId, poisonCands).catch(() => ({ heal: false, poisonTargetId: null, reason: '女巫行动异常，跳过用药', llmTrace: undefined }))
     if (decision.heal && killedId) {
       s = {
         ...s,
@@ -428,9 +544,6 @@ export function useGame() {
               }
 
               let s = prev
-              if (phase !== 'night_werewolf') {
-                s = await maybeGenerateWolfPlan(s)
-              }
               if (phase === 'night_guard') {
                 const guard = s.players.find((p) => p.isAlive && p.role === 'guard' && !p.isHuman)
                 if (guard) {
@@ -454,29 +567,7 @@ export function useGame() {
                 }
                 s = advanceNightOrResolve(s, 'night_guard')
               } else if (phase === 'night_werewolf') {
-                const wolves = getAliveWerewolves(s).filter((p) => !p.isHuman)
-                const alreadyKilling = s.nightActions.some(
-                  (a) => a.round === s.round && a.actionType === 'kill'
-                )
-                if (wolves.length > 0 && !alreadyKilling) {
-                  // 由存活的第一个 AI 狼代表狼队决策，目标为存活的好人
-                  const killer = wolves[0]
-                  const candidates = s.players.filter((p) => p.isAlive && !isWerewolf(p.role))
-                  const decision = await decideWerewolfKill(wolves, s, candidates)
-                  if (decision.targetId) {
-                    const action: NightAction = { round: s.round, actorId: killer.id, targetId: decision.targetId, actionType: 'kill', reason: decision.reason, llmTrace: decision.llmTrace }
-                    s = {
-                      ...s,
-                      nightActions: [
-                        ...s.nightActions,
-                        action,
-                      ],
-                      logs: [...s.logs, logNightAction(action, 'night_werewolf')],
-                    }
-                  }
-                  // 狼刀已定，趁天亮前商定次日计划
-                  s = await maybeGenerateWolfPlan(s)
-                }
+                s = await resolveWolfCouncil(s)
                 s = advanceNightOrResolve(s, 'night_werewolf')
               } else if (phase === 'night_wolf_beauty') {
                 const wolfBeauty = s.players.find((p) => p.isAlive && p.role === 'wolf_beauty' && !p.isHuman)
@@ -558,6 +649,10 @@ export function useGame() {
 
             doActions().catch((err) => {
               console.error(err)
+              setState((current) => {
+                if (!current || current.phase !== phase) return current
+                return fallbackNightAiPhase(current, phase)
+              })
               setAiDebug({
                 label: `夜晚 AI 处理失败：${phase}`,
                 active: false,
@@ -746,9 +841,82 @@ export function useGame() {
   }, [])
 
   const submitNightAction = useCallback(
-    (actorId: string, targetId: string | null, actionType: NightAction['actionType']) => {
+    async (
+      actorId: string,
+      targetId: string | null,
+      actionType: NightAction['actionType'],
+      wolfCouncilInput?: { reason: string; dayStrategy: string; positionStrategy: string; opinions?: WolfCouncilOpinion[]; decisionMode?: 'ai' | 'human' }
+    ) => {
+      if (actionType === 'kill') {
+        if (processingRef.current) return
+        processingRef.current = true
+        setAiThinking(true)
+        setAiDebug({ label: '狼队会议裁决', active: true, startedAt: Date.now(), finishedAt: null })
+        try {
+          await new Promise<void>((resolve) => {
+            setState((prev) => {
+              if (!prev) { resolve(); return prev }
+              const doActions = async () => {
+                let s = prev
+                const actor = s.players.find((p) => p.id === actorId)
+                const seedOpinions = wolfCouncilInput?.opinions ?? []
+                const humanOpinion: WolfCouncilOpinion | null =
+                  actor && isWerewolf(actor.role)
+                    ? {
+                        round: s.round,
+                        wolfId: actor.id,
+                        targetId,
+                        reason: wolfCouncilInput?.reason?.trim() || '人类狼人提交了最终倾向，但没有填写详细理由。',
+                        dayStrategy: wolfCouncilInput?.dayStrategy?.trim() || '按狼队会议结果伪装好人并配合主线。',
+                        positionStrategy: wolfCouncilInput?.positionStrategy?.trim() || '结合自己的发言顺序和座位相邻关系调整发言力度。',
+                      }
+                    : null
+                s = await resolveWolfCouncil(
+                  s,
+                  humanOpinion ? [...seedOpinions, humanOpinion] : seedOpinions,
+                  wolfCouncilInput?.decisionMode === 'human' ? targetId : null
+                )
+                s = advanceNightOrResolve(s, 'night_werewolf')
+                setState(s)
+                resolve()
+              }
+              doActions().catch((err) => {
+                console.error(err)
+                setState((current) => {
+                  if (!current || current.phase !== 'night_werewolf') return current
+                  const fallback = resolveWolfCouncilFallback(current, '狼队会议异常，系统按兜底逻辑选择首个合法目标')
+                  return advanceNightOrResolve(fallback, 'night_werewolf')
+                })
+                setAiDebug({
+                  label: '狼队会议裁决失败',
+                  active: false,
+                  startedAt: null,
+                  finishedAt: Date.now(),
+                  error: err instanceof Error ? err.message : String(err),
+                })
+                resolve()
+              })
+              return prev
+            })
+          })
+        } finally {
+          processingRef.current = false
+          setAiThinking(false)
+          setAiDebug((prev) => prev ? { ...prev, active: false, finishedAt: Date.now() } : prev)
+        }
+        return
+      }
+
       setState((prev) => {
         if (!prev) return prev
+        if (!actionMatchesPhase(prev.phase, actionType)) return prev
+        if (
+          prev.nightActions.some(
+            (a) => a.round === prev.round && a.actorId === actorId && a.actionType === actionType
+          )
+        ) {
+          return prev
+        }
         let newState = {
           ...prev,
           nightActions: [

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { isWerewolf, ROLE_EMOJIS, ROLE_NAMES } from '../../lib/roles'
-import type { GameState, Phase } from '../../lib/types'
+import type { GameState, Phase, WolfCouncilOpinion } from '../../lib/types'
 import { DayPhase } from './DayPhase'
 import { HistoryModal } from './HistoryModal'
 import { NightPhase } from './NightPhase'
@@ -26,7 +26,11 @@ interface Props {
   onHunterShoot: (targetId: string | null) => void
   onWhiteWolfKingExplode: (actorId: string, targetId: string) => void
   triggerAiHunterShoot: (state: GameState) => void
-  onNightAction: (targetId: string | null, actionType: string) => void
+  onNightAction: (
+    targetId: string | null,
+    actionType: string,
+    wolfCouncilInput?: { reason: string; dayStrategy: string; positionStrategy: string; opinions?: WolfCouncilOpinion[]; decisionMode?: 'ai' | 'human' }
+  ) => void
   onSkipNight: () => void
   onReview: () => void
   triggerNightAi: (phase: Phase) => void

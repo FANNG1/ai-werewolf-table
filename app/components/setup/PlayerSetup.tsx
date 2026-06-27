@@ -19,7 +19,7 @@ export function PlayerSetup({ onConfirm }: Props) {
   const [humanPlayers, setHumanPlayers] = useState<{ name: string }[]>([
     { name: '' },
   ])
-  const [aiCount, setAiCount] = useState(5)
+  const [aiCount, setAiCount] = useState(8)
 
   const totalCount = humanPlayers.length + aiCount
 
@@ -69,7 +69,8 @@ export function PlayerSetup({ onConfirm }: Props) {
           )}
         </div>
         {humanPlayers.map((p, i) => (
-          <div key={i} className="flex gap-2 mb-2">
+          <div key={i} className="flex gap-2 mb-2 items-center">
+            <span className="text-gray-500 text-sm w-7 text-right shrink-0">{i + 1}号</span>
             <input
               type="text"
               value={p.name}

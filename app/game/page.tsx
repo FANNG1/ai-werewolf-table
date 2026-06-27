@@ -68,11 +68,12 @@ function GamePageInner() {
       onHunterShoot={submitHunterShoot}
       onWhiteWolfKingExplode={submitWhiteWolfKingExplode}
       triggerAiHunterShoot={triggerAiHunterShoot}
-      onNightAction={(targetId, actionType) =>
+      onNightAction={(targetId, actionType, wolfCouncilInput) =>
         submitNightAction(
           state.players.find((p) => p.isHuman)?.id || '',
           targetId,
-          actionType as Parameters<typeof submitNightAction>[2]
+          actionType as Parameters<typeof submitNightAction>[2],
+          wolfCouncilInput
         )
       }
       onSkipNight={skipNightAction}

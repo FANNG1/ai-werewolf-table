@@ -26,6 +26,7 @@ export function initGame(config: GameConfig): GameState {
   const players: Player[] = config.players.map((p, i) => ({
     id: `p${i}`,
     name: p.name,
+    seatNumber: i + 1,
     role: assignedRoles[i],
     isHuman: p.isHuman,
     isAlive: true,
@@ -62,6 +63,8 @@ export function initGame(config: GameConfig): GameState {
     pendingLastWordsSource: null,
     wolfPlan: null,
     wolfPlanRound: 0,
+    wolfCouncilOpinions: [],
+    wolfCouncilRound: 0,
     publicClaims: [],
     currentSpeakerIndex: 0,
     currentVoterIndex: 0,

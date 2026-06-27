@@ -37,7 +37,7 @@ export function SpeechBubble({ speech, player, isNew }: Props) {
       <div className={`max-w-[75%] ${player.isHuman ? 'items-end' : 'items-start'} flex flex-col`}>
         <div className="flex items-center gap-2 mb-1">
           <span className="text-xs text-gray-400">
-            {player.name}
+            {player.seatNumber}号 {player.name}
             {player.isRoleRevealed && (
               <span className="ml-1 text-yellow-400">
                 [{ROLE_NAMES[player.role]}]

@@ -1,6 +1,11 @@
-import type { AiRequestTrace, GameState, Player, Role, WolfPlan } from './types'
+import type { AiRequestTrace, GameState, Player, Role, WolfCouncilOpinion, WolfPlan } from './types'
 import { ROLE_NAMES, isWerewolf } from './roles'
 import { computeRoundStrategy } from './strategy'
+
+// 座位号+名字的统一格式，用于 AI prompt 中引用玩家
+function seatName(p: Player): string {
+  return `${p.seatNumber}号${p.name}`
+}
 
 // ───────────────────────── 私有视角构造 ─────────────────────────
 // 每个 AI 只能看到：公开信息（发言、死亡公告、投票、出局翻牌）+ 自己角色的私密信息。
@@ -82,12 +87,12 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
   lines.push('【当前局势（所有人可见）】')
   // 打乱存活名单顺序：真人固定是 p0、永远排在第一，会让 LLM 因首位偏好而过度针对「玩家1」
   const alive = shuffleCopy(state.players.filter((p) => p.isAlive))
-  lines.push(`第${state.round}天。存活玩家：${alive.map((p) => p.name).join('、')}`)
+  lines.push(`第${state.round}天。存活玩家：${alive.map((p) => seatName(p)).join('、')}`)
   const dead = state.players.filter((p) => !p.isAlive)
   if (dead.length) {
     // 保密规则：出局者默认不公开身份，只有已翻牌的（白痴/开枪的猎人狼王）才标注角色
     lines.push(
-      `已出局：${dead.map((p) => (p.isRoleRevealed ? `${p.name}（${ROLE_NAMES[p.role]}）` : `${p.name}（身份未知）`)).join('、')}`
+      `已出局：${dead.map((p) => (p.isRoleRevealed ? `${seatName(p)}（${ROLE_NAMES[p.role]}）` : `${seatName(p)}（身份未知）`)).join('、')}`
     )
   }
 
@@ -117,6 +122,13 @@ export function buildPlayerPerspective(player: Player, state: GameState): string
       }
       lines.push(`- 第${claim.round}天 ${claimant} 声明 ${claim.claimType}${target ? ` -> ${target}` : ''}${resultText ? ` = ${resultText}` : ''}；${claim.summary}`)
     })
+  }
+
+  const factHints = buildFactCheckHints(state)
+  if (factHints.length > 0) {
+    lines.push('')
+    lines.push('【客观事实锚点（用于核对其他玩家发言是否与事实矛盾）】')
+    factHints.forEach((s) => lines.push('- ' + s))
   }
 
   const coordSignals = buildCoordinationSignal(state)
@@ -191,6 +203,32 @@ function buildPublicSignalSummary(state: GameState): string[] {
       const content = s.content.length > 80 ? `${s.content.slice(0, 80)}...` : s.content
       return `第${s.round}天 ${p?.name ?? '未知'}：${content}`
     })
+}
+
+// 把客观可验证事实（每晚死亡、已翻牌身份）整理成列表，注入 prompt 作为事实锚点，
+// 让 AI 有具体依据去核对其他玩家发言是否自相矛盾或与事实冲突。
+function buildFactCheckHints(state: GameState): string[] {
+  const hints: string[] = []
+  for (let r = 1; r <= state.round; r++) {
+    const nightResult = state.logs.find((l) => l.round === r && l.type === 'night_result')
+    if (nightResult) {
+      const deaths = (nightResult.data.deaths as string[]) || []
+      if (deaths.length === 0) {
+        hints.push(`第${r}晚：平安夜，无人夜间死亡`)
+      } else {
+        const names = deaths.map((id) => {
+          const p = state.players.find((q) => q.id === id)
+          return p ? seatName(p) : '???'
+        })
+        hints.push(`第${r}晚：夜间死亡 ${names.join('、')}`)
+      }
+    }
+  }
+  const revealed = state.players.filter((p) => !p.isAlive && p.isRoleRevealed)
+  if (revealed.length > 0) {
+    hints.push(`已翻牌确认身份：${revealed.map((p) => `${seatName(p)}=${ROLE_NAMES[p.role]}`).join('、')}`)
+  }
+  return hints
 }
 
 // 基于公开票型计算「抱团信号」：把 AI 不擅长的跨轮成对归纳替它做掉。
@@ -291,7 +329,8 @@ function getRoleStrategy(role: Role): string {
       return `你的守卫策略：
 - 守护目标应优先考虑疑似预言家、女巫、强势好人或可能被狼人刀的玩家。
 - 不能连续两晚守同一个人。
-- 发言时不要随意暴露守护记录，除非能帮助好人排坑或证明逻辑。`
+- 发言时不要随意暴露守护记录，除非能帮助好人排坑或证明逻辑。
+- 【铁律】如果发言中涉及守护对象，必须与你私密信息里的"守护记录"完全一致，绝对不能捏造或错报守护目标（包括自守）。`
     case 'idiot':
       return `你的白痴策略：
 - 第一次被投票出局会免死并公开身份，但之后失去投票权。
@@ -475,6 +514,14 @@ export interface AiTargetDecision {
 function matchPlayerByName(name: string, candidates: Player[]): Player | undefined {
   const n = (name || '').trim()
   if (!n) return undefined
+
+  // 支持 "3号" 或 "3" 这样纯座位号的匹配
+  const seatMatch = n.match(/^(\d+)号?$/)
+  if (seatMatch) {
+    const num = parseInt(seatMatch[1], 10)
+    const bySeat = candidates.find((c) => c.seatNumber === num)
+    if (bySeat) return bySeat
+  }
 
   const exact = candidates.find((c) => c.name === n)
   if (exact) return exact
@@ -687,9 +734,11 @@ function seerVerified(player: Player, state: GameState): { goodIds: string[]; al
   return { goodIds: [...goodIds], aliveWolfIds: [...aliveWolfIds] }
 }
 
+// 识别场上"交叉验证好人"：单预言家（无对跳）+ 女巫声称毒了预言家查杀的死者。
+// 这些人的身份已被至少两条独立信息线印证，好人不应将票投向他们。
 function voteGuardrail(player: Player, state: GameState, candidates: Player[]): { instruction: string; fallbackId?: string } {
   const candidateIds = new Set(candidates.map((c) => c.id))
-  const nameOf = (id?: string | null) => state.players.find((p) => p.id === id)?.name ?? '未知'
+  const nameOf = (id?: string | null) => { const p = state.players.find((q) => q.id === id); return p ? seatName(p) : '未知' }
   const wolfIds = new Set(state.players.filter((p) => isWerewolf(p.role)).map((p) => p.id))
 
   // 预言家最高优先级：绝不投自己验过的金水；有存活查杀则优先投。
@@ -710,17 +759,13 @@ function voteGuardrail(player: Player, state: GameState, candidates: Player[]): 
     }
   }
 
-  const seerKillClaims = state.publicClaims.filter(
-    (c) => c.claimType === 'seer' && c.result === 'werewolf' && !!c.targetId && candidateIds.has(c.claimantId)
-  )
-  const seerClaimantIds = Array.from(
-    new Set(state.publicClaims.filter((c) => c.claimType === 'seer').map((c) => c.claimantId))
-  )
-  const claimsAgainstMe = seerKillClaims.filter((c) => c.targetId === player.id)
-  const nonWolfClaimAgainstMe = claimsAgainstMe.find((c) => !wolfIds.has(c.claimantId))
-  const wolfClaimAgainstMe = claimsAgainstMe.find((c) => wolfIds.has(c.claimantId))
-
   if (isWerewolf(player.role)) {
+    const seerKillClaims = state.publicClaims.filter(
+      (c) => c.claimType === 'seer' && c.result === 'werewolf' && !!c.targetId && candidateIds.has(c.claimantId)
+    )
+    const claimsAgainstMe = seerKillClaims.filter((c) => c.targetId === player.id)
+    const nonWolfClaimAgainstMe = claimsAgainstMe.find((c) => !wolfIds.has(c.claimantId))
+    const wolfClaimAgainstMe = claimsAgainstMe.find((c) => wolfIds.has(c.claimantId))
     if (nonWolfClaimAgainstMe) {
       return {
         instruction: `硬局势：${nameOf(nonWolfClaimAgainstMe.claimantId)}以预言家身份查杀了你。作为狼人，你投他属于正常自保/冲票；除非已有更好抗推位，否则不要投狼同伴。`,
@@ -754,22 +799,9 @@ function voteGuardrail(player: Player, state: GameState, candidates: Player[]): 
             : undefined,
       }
     }
-  } else {
-    const liveSeerKill = seerKillClaims.find((c) => c.targetId && candidateIds.has(c.targetId))
-    if (liveSeerKill) {
-      const claimantName = nameOf(liveSeerKill.claimantId)
-      const targetName = nameOf(liveSeerKill.targetId)
-      const rivalSeers = seerClaimantIds.filter((id) => id !== liveSeerKill.claimantId)
-      const rivalLine = rivalSeers.length
-        ? `场上还有其他预言家声明者：${rivalSeers.map(nameOf).join('、')}，这是对跳局，不能只因为有人报查杀就自动跟票。`
-        : '目前公开信息里只有这一名预言家声明者，但单预言家查杀仍可能是狼悍跳，不能当成铁证。'
-      return {
-        instruction: `公开信息：${claimantName}以预言家身份查杀了${targetName}。${rivalLine}你需要先判断${claimantName}的预言家可信度：他的发言是否前后一致、验人顺序是否合理、是否像狼悍跳冲票、票型是否有人异常抱团。只有当他明显更像真预言家时，才优先投${targetName}；如果他像悍跳狼，可以投${claimantName}或其他更高狼面玩家。`,
-      }
-    }
   }
 
-  return { instruction: '没有必须覆盖投票的硬局势，按发言、票型和身份收益综合判断。' }
+  return { instruction: '' }
 }
 
 const CLAIM_INSTRUCTION = `同时，请如实标注你在这段话里【公开声明的、关于你自己的身份或信息】：
@@ -832,9 +864,13 @@ ${progressNote}
 如果你是预言家/女巫/守卫/猎人等神职，可以在收益足够时选择起跳或给出压力，但不要无意义暴露身份。${strategyNote}${seerFactNote}${wolfPlanNote}
 ${pushTargetName ? `\n本轮关键目标玩家名：${pushTargetName}。如果你的任务要求推动目标，发言里必须明确点名。` : ''}
   ${CLAIM_INSTRUCTION}
-请先在 analysis 字段里用 1-2 句话简要推理（基于哪些公开信息/自己的身份信息得出本轮判断），再在 speech 写出最终发言——先想清楚再开口，不要说空话。
-重要约束：speech 中不得直接或间接暴露未公开的私密信息（守护记录、真实身份、夜间行动结果），除非你已决定起跳且收益足够。
-返回 JSON：{"analysis":"简要推理（仅供系统使用，绝不展示给其他玩家）","speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
+发言前必须在 analysis 字段做三步分析（每步1句，分析仅供系统使用不展示）：
+① ${spokenThisRound.length === 0 ? '夜间结果解读：昨晚死了谁（或平安夜）？这意味着狼队在针对什么角色/打什么路线？对当前局势有什么影响？给出你的判断。' : '矛盾核查：对照【客观事实锚点】，本轮已发言的人里，谁的说法与夜晚死亡/夜间结果/已翻牌身份存在矛盾或无法自洽？请逐一点名并说明矛盾点。若无矛盾则写"暂无明显矛盾"。'}
+② 可疑定位：综合${spokenThisRound.length === 0 ? '夜间结果、角色逻辑和你的私密信息，给出你目前对其他玩家的初始倾向——谁更可疑、谁更值得信任？即使没有发言，也可以基于夜死目标和位置关系给出初步判断' : '矛盾核查、票型抱团信号和发言逻辑，目前最可疑的1-2人是谁？为什么'}？
+③ 本轮任务：结合你的角色任务（如有），这轮发言要达成什么目标（表态/站边/推人/反指）？
+发言内容（speech）必须体现①②的结论，不能含糊过场；${spokenThisRound.length === 0 ? '绝不能说"信息不多先观察"这类空话——基于夜间结果和角色逻辑一定能给出初步判断。' : '若存在矛盾应在发言中直接指出。'}
+重要约束：speech 中不得直接或间接暴露未公开的私密信息（守护记录、真实身份、夜间行动结果），除非你已决定起跳且收益足够。如果发言中提到夜晚行动（守护了谁、查验了谁、用药了谁），必须与你私密信息中的记录完全一致，严禁捏造或错报任何夜晚行动对象。
+返回 JSON：{"analysis":"三步分析（①矛盾核查 ②可疑定位 ③本轮任务，仅供系统使用）","speech":"你的发言内容","claims":[{"claimType":"seer","targetName":"玩家名或null","result":"werewolf或villager或unknown或null"}]}`
   try {
     let result = await callAiJsonWithTrace(getInstruction(player), perspective, task, 900)
     let parsed = result.parsed
@@ -882,15 +918,52 @@ function planPlayerName(state: GameState, id?: string | null): string {
   return state.players.find((p) => p.id === id)?.name ?? '未知'
 }
 
+function playerIndexLabel(state: GameState, player: Player): string {
+  const idx = state.players.findIndex((p) => p.id === player.id)
+  const left = idx >= 0 ? state.players[(idx - 1 + state.players.length) % state.players.length] : null
+  const right = idx >= 0 ? state.players[(idx + 1) % state.players.length] : null
+  return `${seatName(player)}${left ? `，左邻${seatName(left)}` : ''}${right ? `，右邻${seatName(right)}` : ''}`
+}
+
+function nextDaySpeakingOrder(state: GameState, assumedKillId?: string | null): Player[] {
+  return state.players.filter((p) => p.isAlive && p.id !== assumedKillId)
+}
+
+function buildWolfPositionSummary(state: GameState, wolves: Player[], assumedKillId?: string | null): string {
+  const wolfIds = new Set(wolves.map((w) => w.id))
+  const speaking = nextDaySpeakingOrder(state, assumedKillId)
+  const lines = [
+    `座位顺序：${state.players.map((p) => `${seatName(p)}${wolfIds.has(p.id) ? '(狼)' : ''}${p.isAlive ? '' : '(已出局)'}`).join(' -> ')}`,
+    `次日存活发言轮转（若刀口成立，实际起点天亮后随机）：${speaking.map((p) => `${seatName(p)}${wolfIds.has(p.id) ? '(狼)' : ''}`).join(' -> ') || '无'}`,
+  ]
+  for (const wolf of wolves) {
+    const speakIndex = speaking.findIndex((p) => p.id === wolf.id)
+    const band = speakIndex < 0
+      ? '不发言'
+      : speakIndex < Math.ceil(speaking.length / 3)
+        ? '前置位'
+        : speakIndex >= Math.floor((speaking.length * 2) / 3)
+          ? '后置位'
+          : '中置位'
+    lines.push(`${playerIndexLabel(state, wolf)}；轮转位置：${band}${speakIndex >= 0 ? `（座位轮转第${speakIndex + 1}个，实际前后置需天亮后按随机起点调整）` : ''}`)
+  }
+  return lines.join('\n')
+}
+
 function formatWolfPlanForPlayer(plan: WolfPlan, player: Player, state: GameState): string {
   const ownPoint = plan.talkingPointsByWolfId[player.id] || '按狼队整体策略伪装好人，结合场上局势临场应变。'
+  const ownPosition = plan.positionNotesByWolfId?.[player.id] || '结合自己的发言顺序和座位关系，不要和同伴重复同一种踩保逻辑。'
   return [
     `整体策略：${plan.tactic}`,
+    `最终刀口：${planPlayerName(state, plan.finalKillTargetId)}`,
+    `裁决理由：${plan.decisionReason || '按狼队夜间协商综合决定。'}`,
+    `策略推理：${plan.strategyReason || '根据刀口、座位和次日发言轮转安排狼队分工。'}`,
     `主推目标：${planPlayerName(state, plan.pushTargetId)}`,
     `悍跳狼：${planPlayerName(state, plan.fakeClaimWolfId)}`,
     `保护同伴：${planPlayerName(state, plan.protectWolfId)}`,
     `倒钩/卖队友对象：${planPlayerName(state, plan.busWolfId)}`,
     `你的个人话术：${ownPoint}`,
+    `你的位置策略：${ownPosition}`,
     `备注：${plan.notes}`,
   ].join('\n')
 }
@@ -922,19 +995,35 @@ function normalizeWolfPlan(raw: Record<string, unknown>, wolves: Player[], state
         ? point.trim().slice(0, 120)
         : '伪装好人，结合发言和票型找机会推动错误焦点。'
   }
+  const rawPositionNotes =
+    raw.positionNotesByWolfId && typeof raw.positionNotesByWolfId === 'object' && !Array.isArray(raw.positionNotesByWolfId)
+      ? raw.positionNotesByWolfId as Record<string, unknown>
+      : {}
+  const positionNotesByWolfId: Record<string, string> = {}
+  for (const wolf of wolves) {
+    const note = rawPositionNotes[wolf.id]
+    positionNotesByWolfId[wolf.id] =
+      typeof note === 'string' && note.trim()
+        ? note.trim().slice(0, 160)
+        : '根据自己的发言顺序和座位相邻关系调整力度，避免和狼同伴重复同一套逻辑。'
+  }
   return {
     round: state.round,
     tactic,
+    finalKillTargetId: playerId(raw.finalKillTargetId),
+    decisionReason: typeof raw.decisionReason === 'string' ? raw.decisionReason.slice(0, 180) : 'AI 综合狼队意见后确定。',
+    strategyReason: typeof raw.strategyReason === 'string' ? raw.strategyReason.slice(0, 220) : '根据狼队意见、刀口收益、座位关系和次日发言轮转安排分工。',
     fakeClaimWolfId: wolfId(raw.fakeClaimWolfId),
     pushTargetId: playerId(raw.pushTargetId),
     protectWolfId: wolfId(raw.protectWolfId),
     busWolfId: wolfId(raw.busWolfId),
     talkingPointsByWolfId,
+    positionNotesByWolfId,
     notes: typeof raw.notes === 'string' ? raw.notes.slice(0, 160) : '保持发言一致，避免暴露狼队视角。',
   }
 }
 
-function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
+export function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
   const candidates = state.players.filter((p) => p.isAlive && !isWerewolf(p.role))
   const pushTarget = candidates[0]?.id ?? null
   const whiteWolf = wolves.find((w) => w.role === 'white_wolf_king')
@@ -942,6 +1031,9 @@ function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
   return {
     round: state.round,
     tactic: fakeClaimWolfId ? 'fake_claim' : 'misdirect',
+    finalKillTargetId: pushTarget,
+    decisionReason: '裁决失败时按兜底逻辑选择存活好人作为刀口，并生成基础狼队分工。',
+    strategyReason: '兜底策略优先保持狼队发言一致，并根据特殊狼身份安排冲锋或深水。',
     fakeClaimWolfId,
     pushTargetId: pushTarget,
     protectWolfId: wolves[0]?.id ?? null,
@@ -953,7 +1045,161 @@ function fallbackWolfPlan(wolves: Player[], state: GameState): WolfPlan {
           ? '深水隐藏，不主动悍跳，发言像谨慎好人，夜晚魅惑关键神职或最可能推你的人。'
           : `伪装好人，质疑 ${pushTarget ? planPlayerName(state, pushTarget) : '强势好人'} 的发言逻辑。`])
     ),
+    positionNotesByWolfId: Object.fromEntries(
+      wolves.map((w) => {
+        const speaking = nextDaySpeakingOrder(state, pushTarget)
+        const idx = speaking.findIndex((p) => p.id === w.id)
+        return [w.id, idx >= 0 && idx < speaking.length / 2
+          ? '你预计偏前置发言，先铺身份和怀疑方向，不要暴露狼队知道刀口。'
+          : '你预计偏后置发言，观察前置发言后补强狼队主线或适度倒钩。']
+      })
+    ),
     notes: fakeClaimWolfId ? '白狼王承担悍跳/冲锋，狼美人和普通狼配合做深水或站边。' : '统一把焦点推向好人，避免互相矛盾。',
+  }
+}
+
+function matchPlayerByIdOrName(value: unknown, candidates: Player[]): Player | undefined {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text) return undefined
+  return candidates.find((p) => p.id === text) ?? matchPlayerByName(text, candidates)
+}
+
+function fallbackWolfCouncilOpinion(wolf: Player, state: GameState, candidates: Player[]): WolfCouncilOpinion {
+  const target = candidates.find((p) => state.publicClaims.some((c) => c.claimType === 'seer' && c.claimantId === p.id)) ?? candidates[0] ?? null
+  return {
+    round: state.round,
+    wolfId: wolf.id,
+    targetId: target?.id ?? null,
+    reason: target ? `信息不足时优先压制${target.name}，避免强好人带队。` : '没有可刀目标。',
+    dayStrategy: wolf.role === 'wolf_beauty'
+      ? '深水隐藏，轻踩狼队主推目标，重点降低自身处理优先级。'
+      : '伪装好人视角分析死亡和发言，把焦点引向狼队主推目标。',
+    positionStrategy: '根据自己的发言顺序和座位相邻关系调整力度，避免和同伴重复同一种发言。',
+  }
+}
+
+export async function generateWolfCouncilOpinion(
+  wolf: Player,
+  wolves: Player[],
+  state: GameState,
+  candidates: Player[]
+): Promise<WolfCouncilOpinion> {
+  if (candidates.length === 0) return fallbackWolfCouncilOpinion(wolf, state, candidates)
+  const wolfNames = wolves.map((w) => `${w.name}(${ROLE_NAMES[w.role]})`).join('、')
+  const candidateLine = shuffleCopy(candidates).map((c) => `${c.name}(${c.id})`).join('、')
+  const positionSummary = buildWolfPositionSummary(state, wolves)
+  const evidenceNote = `公开信息约束：${
+    state.speeches.length > 0 ? '可以引用真实发言。' : '目前没有公开发言，不要编造发言矛盾、带队、跳身份。'
+  }${
+    state.votes.length > 0 ? '可以引用真实票型。' : '目前没有投票记录，不要编造票型。'
+  }`
+  const task = `现在是狼人夜晚会议。你是${wolf.name}，请独立给狼队提出今晚刀人建议和明天发言策略。
+存活狼队：${wolfNames}。
+可刀目标：${candidateLine}。
+位置信息：
+${positionSummary}
+${evidenceNote}
+要求：
+- 给出你建议的刀口和明确理由。
+- 明天发言策略必须结合你的发言顺序位置（前置/中置/后置）和座位相邻关系。
+- 不能公开承认狼人身份或暴露真实狼同伴；策略要能伪装成好人视角。
+返回 JSON：{"targetId":"玩家id","reason":"建议刀这个人的理由","dayStrategy":"明天你建议狼队如何发言/分工","positionStrategy":"结合发言顺序和座位相邻的位置策略"}`
+
+  try {
+    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(wolf), buildPlayerPerspective(wolf, state), task, 520)
+    const matched = matchPlayerByIdOrName(parsed.targetId ?? parsed.target, candidates)
+    return {
+      round: state.round,
+      wolfId: wolf.id,
+      targetId: matched?.id ?? null,
+      reason: sanitizeDecisionReason(parsed.reason, state),
+      dayStrategy: typeof parsed.dayStrategy === 'string' && parsed.dayStrategy.trim()
+        ? parsed.dayStrategy.trim().slice(0, 180)
+        : '伪装好人视角，围绕狼队目标组织发言。',
+      positionStrategy: typeof parsed.positionStrategy === 'string' && parsed.positionStrategy.trim()
+        ? parsed.positionStrategy.trim().slice(0, 180)
+        : '结合发言顺序和座位相邻关系调整发言力度。',
+      llmTrace: trace,
+    }
+  } catch {
+    return fallbackWolfCouncilOpinion(wolf, state, candidates)
+  }
+}
+
+export async function judgeWolfCouncilDecision(
+  wolves: Player[],
+  state: GameState,
+  opinions: WolfCouncilOpinion[],
+  forcedTargetId?: string | null
+): Promise<{ targetId: string | null; plan: WolfPlan; reason: string; llmTrace?: AiRequestTrace }> {
+  const candidates = state.players.filter((p) => p.isAlive && !isWerewolf(p.role))
+  if (wolves.length === 0 || candidates.length === 0) {
+    const plan = fallbackWolfPlan(wolves, state)
+    return { targetId: null, plan, reason: '没有存活狼人或可刀目标' }
+  }
+  const forcedTarget = forcedTargetId ? candidates.find((p) => p.id === forcedTargetId) ?? null : null
+
+  const leader = wolves[0]
+  const opinionLine = opinions.map((o) => {
+    const wolf = state.players.find((p) => p.id === o.wolfId)
+    const target = o.targetId ? state.players.find((p) => p.id === o.targetId) : null
+    return `- ${wolf?.name ?? o.wolfId}建议刀${target?.name ?? '无'}；理由：${o.reason}；明天策略：${o.dayStrategy}；位置策略：${o.positionStrategy}`
+  }).join('\n')
+  const positionSummary = buildWolfPositionSummary(state, wolves)
+  const task = `现在是狼人夜晚会议的最终裁决。你是逻辑裁判，不是任一玩家。请综合所有狼队意见，决定最终刀口和明天发言计划。
+候选刀口：${candidates.map((p) => `${p.name}(${p.id})`).join('、')}。
+存活狼队：${wolves.map((w) => `${w.name}(${w.id}, ${ROLE_NAMES[w.role]})`).join('、')}。
+狼队意见：
+${opinionLine || '无有效意见'}
+位置信息：
+${positionSummary}
+${forcedTarget ? `真人狼人已拍板最终刀口为【${forcedTarget.name}(${forcedTarget.id})】。你必须尊重这个刀口，只负责生成配套的理由、分工和明天发言计划。` : '本局由 AI 裁决最终刀口，请综合意见自行选择最优目标。'}
+裁决要求：
+- finalKillTargetId 必须是候选刀口 id。${forcedTarget ? `本次必须填 ${forcedTarget.id}。` : ''}
+- decisionReason 要解释最终刀口的推理理由：为什么采纳/否定各意见、为什么这个目标收益最高。
+- strategyReason 要解释明天行动策略的推理理由：为什么这样分工、如何结合刀口、座位相邻和发言轮转。
+- 明天发言计划必须同时考虑发言顺序位置和座位相邻位置。
+- talkingPointsByWolfId 和 positionNotesByWolfId 必须覆盖每只狼的 id，且每只狼分工不同。
+- 若安排悍跳，优先考虑白狼王；狼美人默认深水隐藏，除非局势要求。
+返回 JSON：{"finalKillTargetId":"玩家id","decisionReason":"刀人推理理由","strategyReason":"明天策略推理理由","tactic":"fake_claim/deep_cover/bus/rush_vote/misdirect","fakeClaimWolfId":"狼人id或null","pushTargetId":"玩家id或null","protectWolfId":"狼人id或null","busWolfId":"狼人id或null","talkingPointsByWolfId":{"狼人id":"个人话术"},"positionNotesByWolfId":{"狼人id":"位置策略"},"notes":"简短备注"}`
+
+  try {
+    const { parsed, trace } = await callAiJsonWithTrace(
+      '你是狼人杀狼队夜晚会议的普通 AI 仲裁者。你只输出合法 JSON，且必须遵守游戏当前规则和隐藏信息边界。',
+      buildPlayerPerspective(leader, state),
+      task,
+      900
+    )
+    const target = forcedTarget ?? matchPlayerByIdOrName(parsed.finalKillTargetId ?? parsed.targetId ?? parsed.target, candidates)
+    if (!target) throw new Error('裁决刀口非法')
+    const plan = normalizeWolfPlan({ ...parsed, finalKillTargetId: target.id }, wolves, state)
+    return {
+      targetId: target.id,
+      plan: { ...plan, finalKillTargetId: target.id },
+      reason: plan.decisionReason || sanitizeDecisionReason(parsed.decisionReason, state),
+      llmTrace: trace,
+    }
+  } catch {
+    const tally: Record<string, number> = {}
+    for (const opinion of opinions) {
+      if (opinion.targetId && candidates.some((p) => p.id === opinion.targetId)) {
+        tally[opinion.targetId] = (tally[opinion.targetId] || 0) + 1
+      }
+    }
+    const fallbackTargetId =
+      forcedTarget?.id ??
+      Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] ??
+      candidates.find((p) => state.publicClaims.some((c) => c.claimType === 'seer' && c.claimantId === p.id))?.id ??
+      candidates[0]?.id ??
+      null
+    const plan = {
+      ...fallbackWolfPlan(wolves, state),
+      finalKillTargetId: fallbackTargetId,
+      pushTargetId: fallbackTargetId,
+      decisionReason: 'AI 仲裁失败，按狼队意见和兜底逻辑确定刀口。',
+      strategyReason: 'AI 仲裁失败，按兜底逻辑生成基础狼队分工。',
+    }
+    return { targetId: fallbackTargetId, plan, reason: 'AI 仲裁失败，按狼队意见和兜底逻辑确定刀口' }
   }
 }
 
@@ -1082,16 +1328,44 @@ export async function generateAiVote(
       ? '注意：票投给谁，表示投票者想放逐/怀疑谁；某人票数领先，表示他当前是主要抗推位，不表示大家支持或站边他。'
       : '当前还没有票型，不要编造“多数玩家站边/投票支持某人”。'
 
-  const task = `现在是投票放逐阶段，本轮采用依次公开投票。候选人：${candidates.map((c) => c.name).join('、')}。
+  // 场上公开声称且无人对跳的神职，附带发言位置信心标注
+  const allRoundSpeeches = state.speeches.filter((s) => !s.isLastWords)
+  const uncontestednClaimedRoles = (['seer', 'witch', 'hunter', 'guard'] as const).flatMap((role) => {
+    const claimants = Array.from(new Set(state.publicClaims.filter((c) => c.claimType === role).map((c) => c.claimantId)))
+    if (claimants.length !== 1) return []
+    const claimantId = claimants[0]
+    // 找到该玩家第一次跳身份所在轮次的发言顺序
+    const firstClaimRound = state.publicClaims.find((c) => c.claimType === role && c.claimantId === claimantId)?.round ?? 1
+    const speechesInClaimRound = allRoundSpeeches.filter((s) => s.round === firstClaimRound)
+    const speakerIndex = speechesInClaimRound.findIndex((s) => s.playerId === claimantId)
+    const totalSpeakers = speechesInClaimRound.length
+    let positionLabel: string
+    if (speakerIndex < 0 || totalSpeakers === 0) {
+      positionLabel = '发言位置未知'
+    } else if (speakerIndex < Math.ceil(totalSpeakers / 3)) {
+      positionLabel = `前置位（第${speakerIndex + 1}/${totalSpeakers}位发言，主动起跳可信度较高）`
+    } else if (speakerIndex >= Math.floor((totalSpeakers * 2) / 3)) {
+      positionLabel = `后置位（第${speakerIndex + 1}/${totalSpeakers}位发言，看完大多数人再跳，悍跳嫌疑相对更高，需结合发言逻辑审慎判断）`
+    } else {
+      positionLabel = `中置位（第${speakerIndex + 1}/${totalSpeakers}位发言，可信度居中）`
+    }
+    return [{ id: claimantId, positionLabel }]
+  })
+  const uncontestednLine = uncontestednClaimedRoles.length > 0
+    ? `【已公开跳身份且无人对跳的玩家】：${uncontestednClaimedRoles.map(({ id, positionLabel }) => { const p = state.players.find((q) => q.id === id); return `${p ? seatName(p) : id}（${positionLabel}）` }).join('、')}。好人阵营不应以"信息不足"为由投票放逐前置位起跳者；后置位起跳者可信度打折，若其发言存在漏洞则可作为怀疑目标；信息不足时应转投发言逻辑最差的其他候选人。\n`
+    : ''
+  const guardrailLine = guardrail.instruction ? `【角色私密约束（最高优先级）】\n${guardrail.instruction}\n` : ''
+  const task = `现在是投票放逐阶段，本轮采用依次公开投票。候选人：${candidates.map((c) => seatName(c)).join('、')}。
 ${tallyLine}
 ${voteMeaning}
-【本轮投票关键局势】
-${guardrail.instruction}
-请基于你掌握的信息决定投票放逐谁，并参考当前票型：
-- 好人要优先投最高狼面玩家，结合发言矛盾、对跳可信度、死亡信息；当票型已形成对某个高狼面玩家的合力时可以跟票归票，集中放逐。
-- 狼人要优先推动放逐关键好人或错误焦点，可借票型把水搅浑、分票自保或假意跟好人票；可以倒钩狼同伴，但不能无脑保护或无脑卖队友。
+${uncontestednLine}${guardrailLine}投票前必须在 analysis 字段做三步推理（每步1-2句，仅供系统使用）：
+① 好人清单：基于公开发言、跳身份声明和已知夜间结果，有哪些候选人已被交叉验证或有充分理由认定为好人？这些人不应作为投票目标。若暂无明确证据则写"暂无"。
+② 矛盾定位：候选人中谁的发言与客观事实（夜间死亡时间线/已翻牌身份/自己声称的角色行动）存在无法自洽的矛盾？列出最可疑的1-2人及矛盾原因。若无明显矛盾则写"暂无"。
+③ 投票决策：综合①排除好人、②找出狼嫌，结合当前票型，投谁最合理？若信息确实不足，投发言逻辑最差的人，而不是已跳身份的神职。
+好人要优先投最高狼面玩家，结合发言矛盾、对跳可信度、死亡信息；当票型已形成对某个高狼面玩家的合力时可以跟票归票，集中放逐。
+狼人要优先推动放逐关键好人或错误焦点，可借票型把水搅浑、分票自保或假意跟好人票；可以倒钩狼同伴，但不能无脑保护或无脑卖队友。
 必须选一个，不能弃票。
-  返回 JSON：{"target":"玩家名字","reason":"简短理由"}`
+返回 JSON：{"analysis":"三步推理（①好人清单 ②矛盾定位 ③投票决策，仅供系统使用）","target":"玩家名字","reason":"简短理由"}`
   // 预言家硬约束：绝不投自己验过的金水（即使 LLM 选了也强制改掉）
   const seerInfo = seerVerified(player, state)
   const overrideSeerGoodVote = (targetId: string): { targetId: string; reason: string } | null => {

@@ -30,6 +30,7 @@ export type Phase =
 export interface Player {
   id: string
   name: string
+  seatNumber: number
   role: Role
   isHuman: boolean
   isAlive: boolean
@@ -77,12 +78,26 @@ export interface AiRequestTrace {
 export interface WolfPlan {
   round: number
   tactic: 'fake_claim' | 'deep_cover' | 'bus' | 'rush_vote' | 'misdirect'
+  finalKillTargetId?: string | null
+  decisionReason?: string
+  strategyReason?: string
   fakeClaimWolfId?: string | null
   pushTargetId?: string | null
   protectWolfId?: string | null
   busWolfId?: string | null
   talkingPointsByWolfId: Record<string, string>
+  positionNotesByWolfId?: Record<string, string>
   notes: string
+}
+
+export interface WolfCouncilOpinion {
+  round: number
+  wolfId: string
+  targetId: string | null
+  reason: string
+  dayStrategy: string
+  positionStrategy: string
+  llmTrace?: AiRequestTrace
 }
 
 export interface PublicClaim {
@@ -135,6 +150,8 @@ export interface GameState {
   pendingLastWordsSource: 'night' | 'vote' | 'shot' | null
   wolfPlan: WolfPlan | null
   wolfPlanRound: number
+  wolfCouncilOpinions: WolfCouncilOpinion[]
+  wolfCouncilRound: number
   publicClaims: PublicClaim[]
   currentSpeakerIndex: number
   currentVoterIndex: number

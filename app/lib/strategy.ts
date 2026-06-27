@@ -391,19 +391,86 @@ function computeVillagerStrategy(player: Player, state: GameState): PlayerRoundS
       reason: '有查杀，村民需表态是否跟票',
     }
   }
-  // 4) 默认：给明确倾向，不要说空话
+  // 4) 默认
+  const spokenThisRound = state.speeches.filter((s) => s.round === state.round && s.playerId !== player.id)
+  if (spokenThisRound.length === 0) {
+    // 第一发言位：没有前置发言可核查，改为分析夜间结果 + 给初始倾向
+    const nightDeaths = state.players.filter((p) => !p.isAlive && state.nightDeaths?.includes(p.id))
+    const deathLine = nightDeaths.length > 0
+      ? `昨晚${nightDeaths.map((p) => `${p.seatNumber}号${p.name}`).join('、')}死亡`
+      : '昨晚是平安夜，无人夜间死亡'
+    return {
+      ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
+      talkingGoal: `你是第一个发言的，还没有其他人说话——【${deathLine}】。先分析这个夜间结果：狼队在针对什么角色？打什么路线？然后给出你对其他玩家的初始倾向（哪个座位更可疑），并明确表态你第一轮打算观察谁、怀疑谁。绝不能说"信息不多，先看看"——基于夜间结果一定能分析出初步判断。`,
+      reason: '第一发言位，分析夜间结果并给初始倾向',
+    }
+  }
   return {
     ...base, shouldClaim: false, claimUrgency: 'optional', revealPrivateInfo: false, pushTargetId: null,
-    talkingGoal: `你是普通村民、没有夜晚信息。本轮给出一个明确倾向：点名一个你目前最怀疑的人并给出具体理由（发言前后矛盾、票型异常、强行带节奏、和谁抱团），不要只说"信息不多、先观察"这类空话。`,
-    reason: '常规局势，村民给明确怀疑倾向',
+    talkingGoal: `你是普通村民、没有夜晚信息。本轮先核查已发言玩家的说法：有没有人的说法与已知夜晚死亡/平安夜/历史投票对不上，或者前后自相矛盾？发现漏洞的必须点名指出，不能装作没看见。没有明显矛盾时，给出你目前最怀疑的人并说明具体理由（带节奏异常、票型可疑、发言前后不一致）；绝不能只说"信息不多、先观察"这类空话。`,
+    reason: '常规局势，村民优先找矛盾并给明确怀疑',
   }
 }
 
-// 入口：按角色分派。已实现预言家/狼人/女巫/猎人/村民/白痴，其余返回 null。
+// 守卫：身份暴露后极易被刀，默认深藏；仅有假守卫对跳、被查杀、或已跳三种情况才拍身份。
+// 关键约束：拍身份时必须在 talkingGoal 里带入真实守护记录，让 LLM 锚定正确对象，杜绝捏造。
+function computeGuardStrategy(player: Player, state: GameState): PlayerRoundStrategy {
+  const base = { role: 'guard' as const }
+  const selfClaimed = state.publicClaims.some((c) => c.claimantId === player.id && c.claimType === 'guard')
+  const otherGuardClaims = state.publicClaims.filter((c) => c.claimType === 'guard' && c.claimantId !== player.id)
+  const killedBySeer = state.publicClaims.some(
+    (c) => c.claimType === 'seer' && c.result === 'werewolf' && c.targetId === player.id
+  )
+
+  // 实际守护记录（用于 talkingGoal 锚定，避免 LLM 捏造错误对象）
+  const protectRecords = state.nightActions
+    .filter((a) => a.actorId === player.id && a.actionType === 'protect')
+    .map((a) => {
+      const t = state.players.find((p) => p.id === a.targetId)
+      return t ? `第${a.round}晚守护了${t.name}` : ''
+    })
+    .filter(Boolean)
+  const protectSummary = protectRecords.length > 0 ? protectRecords.join('；') : '暂无守护记录'
+
+  // 1) 已跳 → 守住身份、报准记录
+  if (selfClaimed) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: true, mustClaimRole: 'guard', pushTargetId: null,
+      talkingGoal: `你已公开守卫身份，本轮保持一致：如提到守护对象必须严格用你的真实记录（${protectSummary}），分析局势、给出归票建议，不得改口或报错守护目标。`,
+      reason: '已公开跳守卫，保持一致',
+    }
+  }
+  // 2) 有假守卫 → 必须对跳
+  if (otherGuardClaims.length > 0) {
+    const fakeId = otherGuardClaims[otherGuardClaims.length - 1].claimantId
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'must', revealPrivateInfo: true, mustClaimRole: 'guard', pushTargetId: fakeId,
+      talkingGoal: `场上有人（${nameOf(state, fakeId)}）跳了守卫，你才是真守卫：必须对跳，报出你的真实守护记录（${protectSummary}），质疑对方是否也能给出一致的守护细节，把对方当狼推。不得捏造或修改你的守护记录。`,
+      reason: '遭遇假守卫，必须对跳',
+    }
+  }
+  // 3) 被查杀（必为悍跳狼）→ 拍守卫挡推并自证
+  if (killedBySeer) {
+    return {
+      ...base, shouldClaim: true, claimUrgency: 'strong', revealPrivateInfo: true, pushTargetId: null,
+      talkingGoal: `你被"预言家"查杀，但你其实是守卫（真预言家验守卫只会出好人）：可以拍出守卫身份挡推，如提及守护记录必须严格用真实数据（${protectSummary}），并反指这个"预言家"很可能是悍跳的狼。`,
+      reason: '被查杀必为悍跳狼，拍守卫自证反指',
+    }
+  }
+  // 4) 默认：隐藏身份，像普通好人一样发言
+  return {
+    ...base, shouldClaim: false, claimUrgency: 'hide', revealPrivateInfo: false, pushTargetId: null,
+    talkingGoal: `本轮隐藏守卫身份：不要主动提守护记录、不要暗示自己是守卫。先核查已发言玩家有无说法与已知夜晚死亡或历史信息矛盾，发现漏洞必须点名指出；再给出具体怀疑对象和理由。`,
+    reason: '常规局势，隐藏守卫+主动找矛盾',
+  }
+}
+
+// 入口：按角色分派。已实现预言家/狼人/女巫/猎人/守卫/村民/白痴。
 export function computeRoundStrategy(player: Player, state: GameState): PlayerRoundStrategy | null {
   if (player.role === 'seer') return computeSeerStrategy(player, state)
   if (player.role === 'witch') return computeWitchStrategy(player, state)
   if (player.role === 'hunter') return computeHunterStrategy(player, state)
+  if (player.role === 'guard') return computeGuardStrategy(player, state)
   if (isWerewolf(player.role)) return computeWerewolfStrategy(player, state)
   if (player.role === 'villager' || player.role === 'idiot') return computeVillagerStrategy(player, state)
   return null

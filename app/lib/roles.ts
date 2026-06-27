@@ -85,14 +85,14 @@ export const ROLE_PRESETS: RolePreset[] = [
     roles: ['werewolf', 'werewolf', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
   },
   {
+    name: '9人白狼王局',
+    playerCount: 9,
+    roles: ['werewolf', 'werewolf', 'white_wolf_king', 'seer', 'witch', 'hunter', 'villager', 'villager', 'villager'],
+  },
+  {
     name: '9人狼王局',
     playerCount: 9,
     roles: ['werewolf', 'werewolf', 'wolf_king', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
-  },
-  {
-    name: '9人白狼王局',
-    playerCount: 9,
-    roles: ['werewolf', 'werewolf', 'white_wolf_king', 'seer', 'witch', 'hunter', 'guard', 'villager', 'villager'],
   },
   {
     name: '10人豪华局',

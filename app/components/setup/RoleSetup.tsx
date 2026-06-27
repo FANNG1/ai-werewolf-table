@@ -5,6 +5,7 @@ import { ROLE_DESCRIPTIONS, ROLE_EMOJIS, ROLE_NAMES, ROLE_PRESETS, ROLE_TEAMS } 
 import type { Role } from '../../lib/types'
 
 const ALL_ROLES: Role[] = ['werewolf', 'wolf_king', 'white_wolf_king', 'wolf_beauty', 'villager', 'seer', 'witch', 'hunter', 'guard', 'idiot']
+type PreferredRoleSelection = Role | 'random' | null
 
 interface Props {
   playerCount: number
@@ -24,7 +25,7 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
     return initial
   })
   const humanPlayers = players.filter((p) => p.isHuman)
-  const [preferredRoles, setPreferredRoles] = useState<Array<Role | null>>(
+  const [preferredRoles, setPreferredRoles] = useState<Array<PreferredRoleSelection>>(
     () => humanPlayers.map((p) => p.preferredRole ?? null)
   )
 
@@ -37,6 +38,7 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
     for (const r of ALL_ROLES) newCounts[r] = 0
     for (const r of p.roles) newCounts[r] = (newCounts[r] || 0) + 1
     setCounts(newCounts)
+    setPreferredRoles(humanPlayers.map(() => null))
   }
 
   const adjust = (role: Role, delta: number) => {
@@ -61,20 +63,21 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
   )
   const villagerCount = total - werewolfCount
   const preferredCounts = preferredRoles.reduce((acc, role) => {
-    if (role) acc[role] = (acc[role] || 0) + 1
+    if (role && role !== 'random') acc[role] = (acc[role] || 0) + 1
     return acc
   }, {} as Record<Role, number>)
   const preferredValid = ALL_ROLES.every((role) => (preferredCounts[role] || 0) <= (counts[role] || 0))
-  const isValid = total === playerCount && werewolfCount >= 1 && villagerCount > werewolfCount && preferredValid
+  const allHumansChoseRole = preferredRoles.every((role) => role !== null)
+  const isValid = total === playerCount && werewolfCount >= 1 && villagerCount > werewolfCount && preferredValid && allHumansChoseRole
 
-  const updatePreferredRole = (index: number, role: Role | null) => {
+  const updatePreferredRole = (index: number, role: PreferredRoleSelection) => {
     const next = [...preferredRoles]
     next[index] = role
     setPreferredRoles(next)
   }
 
   const confirm = () => {
-    onConfirm(buildRoles(), preferredRoles)
+    onConfirm(buildRoles(), preferredRoles.map((role) => role === 'random' ? null : role))
   }
 
   return (
@@ -108,16 +111,20 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
           <p className="text-gray-400 text-sm mb-2">真人身份</p>
           <div className="space-y-2">
             {humanPlayers.map((player, index) => {
-              const current = preferredRoles[index] ?? null
+              const current = preferredRoles[index]
               return (
                 <div key={`${player.name}-${index}`} className="bg-gray-800 rounded-xl px-4 py-3">
                   <div className="text-white text-sm font-medium mb-2">{player.name}</div>
                   <select
                     value={current ?? ''}
-                    onChange={(e) => updatePreferredRole(index, e.target.value ? (e.target.value as Role) : null)}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      updatePreferredRole(index, value === 'random' ? 'random' : value ? (value as Role) : null)
+                    }}
                     className="w-full bg-gray-900 text-white rounded-lg px-3 py-2 border border-gray-700 outline-none focus:border-blue-500"
                   >
-                    <option value="">随机身份</option>
+                    <option value="">请选择身份</option>
+                    <option value="random">🎲 随机身份</option>
                     {ALL_ROLES.map((role) => {
                       const usedByOthers = preferredRoles.filter((r, i) => i !== index && r === role).length
                       const available = (counts[role] || 0) - usedByOthers
@@ -128,7 +135,10 @@ export function RoleSetup({ playerCount, players, onConfirm, onBack }: Props) {
                       )
                     })}
                   </select>
-                  {current && (preferredCounts[current] || 0) > (counts[current] || 0) && (
+                  {current === null && (
+                    <p className="text-yellow-400 text-xs mt-2">请选择一个身份；随机身份也是一种选择。</p>
+                  )}
+                  {current && current !== 'random' && (preferredCounts[current] || 0) > (counts[current] || 0) && (
                     <p className="text-red-400 text-xs mt-2">当前角色数量不足，请增加该身份或改为随机。</p>
                   )}
                 </div>

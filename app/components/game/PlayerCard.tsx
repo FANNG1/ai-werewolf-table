@@ -39,6 +39,9 @@ export function PlayerCard({ player, selectable, selected, onClick, showRole, vo
       {!player.isAlive && (
         <div className="text-xs text-red-400">已出局</div>
       )}
+      <div className="absolute top-1 left-1 bg-gray-600 text-gray-300 text-[10px] rounded px-1 leading-tight">
+        {player.seatNumber}号
+      </div>
       {voteCount !== undefined && voteCount > 0 && (
         <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">
           {voteCount}

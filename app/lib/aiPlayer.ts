@@ -1406,7 +1406,7 @@ ${uncontestednLine}${guardrailLine}投票前必须在 analysis 字段做三步�
   }
 
   try {
-    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(player), perspective, task)
+    const { parsed, trace } = await callAiJsonWithTrace(getInstruction(player), perspective, task, 600)
     const matched = matchPlayerByName(String(parsed.target ?? ''), candidates)
     if (matched) {
       const override = overrideSeerGoodVote(matched.id)

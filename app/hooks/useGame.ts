@@ -68,12 +68,24 @@ function logNightAction(action: NightAction, phase: Phase) {
 
 // 把 AI 发言时自己声明的结构化 claim 转成 PublicClaim（targetName → 玩家 id）。
 // 由发言者自报，不再事后猜测，避免张冠李戴和虚构查杀。
+// 各角色自跳时发言里应出现的关键词——只要有其一即视为有效声明
+const CLAIM_KEYWORDS: Record<string, string[]> = {
+  seer: ['预言家', '金水', '查杀', '我验', '我查', '跳预', '验人', '我昨晚'],
+  witch: ['女巫', '解药', '毒药', '银水'],
+  hunter: ['猎人'],
+  guard: ['守卫'],
+  idiot: ['白痴'],
+}
+
 function rawClaimsToPublic(
   raw: RawClaim[],
-  speech: { id: string; playerId: string; round: number },
+  speech: { id: string; playerId: string; round: number; content: string },
   state: GameState
 ): PublicClaim[] {
-  return raw.map((c) => {
+  return raw.flatMap((c) => {
+    // 交叉验证：发言内容必须包含该角色自跳的关键词，否则 AI JSON 里的 claim 可能是幻觉
+    const keywords = CLAIM_KEYWORDS[c.claimType] ?? []
+    if (keywords.length > 0 && !keywords.some((kw) => speech.content.includes(kw))) return []
     const target = c.targetName
       ? state.players.find(
           (p) => p.id !== speech.playerId && (c.targetName!.includes(p.name) || p.name.includes(c.targetName!))
@@ -98,7 +110,7 @@ function rawClaimsToPublic(
             ? `声称女巫：${witchActionLabel}${target.name}（银水非验人）`
             : '声称女巫'
           : `声称${c.claimType === 'hunter' ? '猎人' : c.claimType === 'guard' ? '守卫' : '白痴'}`
-    return {
+    return [{
       id: genId(),
       round: speech.round,
       claimantId: speech.playerId,
@@ -108,7 +120,7 @@ function rawClaimsToPublic(
       witchAction: c.witchAction ?? null,
       rawSpeechId: speech.id,
       summary,
-    }
+    }]
   })
 }
 

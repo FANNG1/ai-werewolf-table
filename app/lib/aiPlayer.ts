@@ -224,22 +224,32 @@ function buildFactCheckHints(state: GameState): string[] {
       }
     }
   }
-  // 白天公开事件：白狼王自爆、猎人/狼王开枪
+  // 白天公开事件：白狼王自爆、猎人/狼王开枪、狼美人殉情
+  const nightPhases = new Set(['night_guard', 'night_werewolf', 'night_wolf_beauty', 'night_seer', 'night_witch'])
   for (const log of state.logs) {
-    if (log.type !== 'action') continue
     const d = log.data as Record<string, unknown>
-    if (d.action === 'white_wolf_king_explode') {
-      const actor = state.players.find((p) => p.id === d.actorId)
-      const target = state.players.find((p) => p.id === d.targetId)
-      if (actor && target) {
-        hints.push(`第${log.round}天：${seatName(actor)}（白狼王）白天自爆，同时带走了${seatName(target)}——两人均已出局`)
+    if (log.type === 'action') {
+      if (d.action === 'white_wolf_king_explode') {
+        const actor = state.players.find((p) => p.id === d.actorId)
+        const target = state.players.find((p) => p.id === d.targetId)
+        if (actor && target) {
+          hints.push(`第${log.round}天：${seatName(actor)}（白狼王）白天自爆，同时带走了${seatName(target)}——两人均已出局`)
+        }
+      }
+      if (log.phase === 'hunter_shoot' && d.shooterId && d.targetId) {
+        const shooter = state.players.find((p) => p.id === d.shooterId)
+        const target = state.players.find((p) => p.id === d.targetId)
+        if (shooter && target) {
+          hints.push(`第${log.round}天：${seatName(shooter)}（${ROLE_NAMES[shooter.role]}）死亡时开枪带走了${seatName(target)}`)
+        }
       }
     }
-    if (log.phase === 'hunter_shoot' && d.shooterId && d.targetId) {
-      const shooter = state.players.find((p) => p.id === d.shooterId)
-      const target = state.players.find((p) => p.id === d.targetId)
-      if (shooter && target) {
-        hints.push(`第${log.round}天：${seatName(shooter)}（${ROLE_NAMES[shooter.role]}）死亡时开枪带走了${seatName(target)}`)
+    // 殉情死亡：夜晚死亡已包含在 night_result 里，只补充白天触发的殉情
+    if (log.type === 'death' && d.reason === 'wolf_beauty_lovers_death' && !nightPhases.has(log.phase as string)) {
+      const beauty = state.players.find((p) => p.id === d.wolfBeautyId)
+      const lover = state.players.find((p) => p.id === d.playerId)
+      if (beauty && lover) {
+        hints.push(`第${log.round}天：${seatName(beauty)}（狼美人）出局后，被其魅惑的${seatName(lover)}殉情出局`)
       }
     }
   }

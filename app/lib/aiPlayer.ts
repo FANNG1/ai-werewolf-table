@@ -205,7 +205,7 @@ function buildPublicSignalSummary(state: GameState): string[] {
     })
 }
 
-// 把客观可验证事实（每晚死亡、已翻牌身份）整理成列表，注入 prompt 作为事实锚点，
+// 把客观可验证事实（每晚死亡、白天关键事件、已翻牌身份）整理成列表，注入 prompt 作为事实锚点，
 // 让 AI 有具体依据去核对其他玩家发言是否自相矛盾或与事实冲突。
 function buildFactCheckHints(state: GameState): string[] {
   const hints: string[] = []
@@ -221,6 +221,25 @@ function buildFactCheckHints(state: GameState): string[] {
           return p ? seatName(p) : '???'
         })
         hints.push(`第${r}晚：夜间死亡 ${names.join('、')}`)
+      }
+    }
+  }
+  // 白天公开事件：白狼王自爆、猎人/狼王开枪
+  for (const log of state.logs) {
+    if (log.type !== 'action') continue
+    const d = log.data as Record<string, unknown>
+    if (d.action === 'white_wolf_king_explode') {
+      const actor = state.players.find((p) => p.id === d.actorId)
+      const target = state.players.find((p) => p.id === d.targetId)
+      if (actor && target) {
+        hints.push(`第${log.round}天：${seatName(actor)}（白狼王）白天自爆，同时带走了${seatName(target)}——两人均已出局`)
+      }
+    }
+    if (log.phase === 'hunter_shoot' && d.shooterId && d.targetId) {
+      const shooter = state.players.find((p) => p.id === d.shooterId)
+      const target = state.players.find((p) => p.id === d.targetId)
+      if (shooter && target) {
+        hints.push(`第${log.round}天：${seatName(shooter)}（${ROLE_NAMES[shooter.role]}）死亡时开枪带走了${seatName(target)}`)
       }
     }
   }
